@@ -14,10 +14,10 @@ DILATOR_SIZE = 100
 
 class VisualRecord(_VisualRecord):
     def __init__(self, title, imgs, footnotes="", fmt="png"):
-        if not isinstance(imgs, (list, tuple, set, frozenset)):
-            imgs = [imgs]
-        if max(imgs[0].shape[:2]) > 1000:
-            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=0.2, fy=0.2) for img in imgs]
+        if isinstance(imgs, (list, tuple, set, frozenset)):
+            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=0.25, fy=0.25) for img in imgs]
+        else:
+            imgs = cv2.resize(imgs.astype(numpy.uint8), None, fx=0.5, fy=0.5)
         _VisualRecord.__init__(self, title, imgs, footnotes, fmt)
 
 
@@ -71,12 +71,6 @@ def myShow(name, img, wt=0):
     mycv2.resizeWindow(name, width, height)
     mycv2.imshow(name, img)
     mycv2.waitKey(wt)
-
-def normalized(img, min_c=10, max_c=90):
-    median = numpy.percentile(img, 50)
-    img_gry = mycv2.subtract(img, median)
-    norm = mycv2.equalizeHist(img_gry)
-    return norm
 
 
 def block(shape, block_shape):
@@ -157,22 +151,15 @@ def deluminate_old(img, sd=3, rad=30):
     return normalized
 
 
-def deluminate(img, sd=3, rad=30):
-    ker = (rad / 2) * 2 + 1
-    smoothed_image = mycv2.blur(img, (ker, ker))
-    Helper.log('smoothed_image', smoothed_image)
+def deluminate(img, rad=70):
+    krad = rad + (0 if rad % 2 else 1)
+    smoothed_image = mycv2.blur(img, (krad, krad))
     avg_image = preprocess(smoothed_image, rad)
-    Helper.log('avg_image', avg_image)
-    smoothed_image = mycv2.blur(avg_image, (ker, ker))
-    Helper.log('smoothed_image', smoothed_image)
-    delumi = mycv2.subtract(img, smoothed_image, dtype=mycv2.CV_8U)
-    Helper.log('delumi', delumi)
+    smoothed_image = mycv2.blur(avg_image, (krad, krad))
+    delumi = mycv2.subtract(img, smoothed_image, dtype=cv2.CV_8U)
     delumi[delumi < 48] = 0
-    Helper.log('delumi - 64', delumi)
     normalized = mycv2.equalizeHist(delumi)
-    Helper.log('normalized', normalized)
-    # normalized[normalized <= 200] = 0
-    # Helper.log('trashed', normalized)
+    Helper.log('deluminate', [smoothed_image, avg_image, smoothed_image, delumi, normalized])
     return normalized
 
 
@@ -188,19 +175,14 @@ def crop(img, indexes, just_circle=True):
     return clipped2
 
 
-def refine_circle_ROI(img, img_color, circle, search_extend_size=50, remove_rim=150):
+def refine_circle_ROI(img, img_color, circle, search_extend_size=50, remove_rim=100):
     r = circle[2]
     clp_x0 = max(circle[0] - r - search_extend_size, 0)
     clp_x1 = min(circle[0] + r + search_extend_size, img.shape[1] - 1)
     clp_y0 = max(circle[1] - r - search_extend_size, 0)
     clp_y1 = min(circle[1] + r + search_extend_size, img.shape[0] - 1)
     clipped = img[clp_y0:clp_y1, clp_x0:clp_x1]
-    norm = mycv2.equalizeHist(clipped)
-    Helper.log('normalized rough ROI %d' % circle[0], clipped)
-    kernel = mycv2.getStructuringElement(mycv2.MORPH_ELLIPSE,(3,3))
-#    norm_closed = mycv2.morphologyEx(norm, mycv2.MORPH_CLOSE, kernel)
-    norm_closed = norm
-    Helper.log('norm_closed rough ROI %d' % circle[0], clipped)
+    norm_closed = mycv2.equalizeHist(clipped)
     clip_color = img_color[clp_y0:clp_y1, clp_x0:clp_x1]
     try:
         betters = mycv2.HoughCircles(norm_closed, mycv2.HOUGH_GRADIENT, 10, r, param1=200, param2=6*r, minRadius=r - search_extend_size, maxRadius=r + search_extend_size)[0].astype(numpy.uint16)
@@ -216,32 +198,42 @@ def refine_circle_ROI(img, img_color, circle, search_extend_size=50, remove_rim=
 
 
 def findROIs(bw, color):
-    min_r = min(bw.shape[:2]) / 4
-    circles = mycv2.HoughCircles(bw, mycv2.HOUGH_GRADIENT, 4, min_r, param1=200, param2=min_r, minRadius=min_r, maxRadius=2 * min_r)[0]
-    circles = circles.astype(numpy.uint16)
-    best_r = circles[0][2]
+    min_r = min(bw.shape[:2]) / 3
+    circles = mycv2.HoughCircles(bw, mycv2.HOUGH_GRADIENT, 4, min_r, param1=200, param2=2*min_r, minRadius=min_r, maxRadius=2 * min_r)[0]
     Helper.logText("initial number of ROIs %d" % circles.shape[0])
-    filtered_circles = circles[circles[:,2] > 0.8 * best_r]
+    filtered_circles = circles.astype(numpy.int16)
+    r025 = filtered_circles[:, 2] / 2
+    filtered_circles = filtered_circles[filtered_circles[:,0] > r025]
+    filtered_circles = filtered_circles[filtered_circles[:,1] > r025]
+#    filtered_circles = filtered_circles[filtered_circles[:,0] < bw.shape[0] - r025]
+#    filtered_circles = filtered_circles[filtered_circles[:,1] < bw.shape[1] - r025]
+    Helper.logText("number ROIs at least 1/4 in %d" % filtered_circles.shape[0])
+    best_c = circles[0]
+    filtered_circles = filtered_circles[filtered_circles[:,2] > (0.8 * best_c[2])]
     Helper.logText("number rough ROIs %d" % filtered_circles.shape[0])
     circles_left2right = sorted(filtered_circles, key=lambda c:c[0])
     better = [refine_circle_ROI(bw, color, c) for c in circles_left2right]
+    info = color.copy()
+    mycv2.circle(info, (best_c[0], best_c[1]), best_c[2], (0, 255, 0), thickness=2)
+    Helper.log("best ROI", info)
     return better
 
 
 def find_colonies1(roi, roi_color):
-    _, threshold = mycv2.threshold(roi, 200, 255, mycv2.THRESH_BINARY)
+    _, threshold = mycv2.threshold(roi, 100, 255, mycv2.THRESH_BINARY)
     morphology = mycv2.morphologyEx(threshold, mycv2.MORPH_OPEN, numpy.ones((3, 3), dtype=int))
-    border = morphology - mycv2.erode(morphology, None)
+    border = morphology - mycv2.erode(morphology, None, iterations=3)
     dt = mycv2.distanceTransform(border, 2, 3).astype(numpy.uint8)
     dt = mycv2.equalizeHist(dt)
-    Helper.log('distanceTransform', dt)
-    __, dt_trash = mycv2.threshold(dt, 100, 255, mycv2.THRESH_BINARY)
-    border = mycv2.dilate(dt_trash, None, iterations=5) - dt_trash
-    # dt_trash = dt_trash.astype(numpy.int32)
-    # cols = mycv2.watershed(roi_color, dt_trash)
-    # cols[cols < 0] = 0
-    # cols = cols.astype(numpy.uint8)
-    cols = border
+    __, dt_trash = mycv2.threshold(dt, 50, 255, mycv2.THRESH_BINARY)
+    ret, markers = mycv2.connectedComponents(dt_trash, connectivity=4)
+    markers[markers != 0] = 255
+    #markers_ws = mycv2.watershed(roi_color, markers)
+    Helper.logText("number = %d" % ret)
+    border2 = mycv2.dilate(dt_trash, None, iterations=5) - dt_trash
+    cols = markers.astype(numpy.uint8)
+    # cols = cv2.watershed(roi_color, dt_trash)
+    Helper.log('distanceTransform', [morphology, border, dt, dt_trash, border2, cols])
     return cols
 
 
@@ -263,18 +255,35 @@ def find_colonies2(roi, roi_color, min_rad=3, max_rad=15):
     return cols
 
 
+def find_colonies4(roi, roi_color, min_rad=9, max_rad=60):
+    _, threshold = mycv2.threshold(roi, 1, 255, mycv2.THRESH_BINARY)
+    min_tr = mycv2.erode(threshold, None, iterations=min_rad)
+    max_tr = cv2.dilate(min_tr, None, iterations=min_rad)
+    try:
+        circles = cv2.HoughCircles(max_tr, mycv2.HOUGH_GRADIENT, 1, 4*min_rad, param1=250, param2=min_rad, minRadius=min_rad, maxRadius=max_rad)[0]
+    except:
+        circles = []
+    circles = circles.astype(numpy.uint16)
+    cols = numpy.zeros(roi.shape, dtype=numpy.uint8)
+    for c in circles:
+        mycv2.circle(cols, (c[0], c[1]), c[2], 255, thickness=2)
+    Helper.logText('number of circles (colonies): {0}', circles.shape[0])
+    Helper.log('find_colonies4', [threshold, min_tr, max_tr, cols])
+    return cols
+
+
 def find_colonies3(img):
     # Setup SimpleBlobDetector parameters.
     params = mycv2.SimpleBlobDetector_Params()
     # Change thresholds
-    params.minThreshold = 150
+    params.minThreshold = 0
     params.maxThreshold = 255
     # Filter by Area.
-    params.filterByArea = False
+    params.filterByArea = True
     params.minArea = 10
     # Filter by Circularity
-    params.filterByCircularity = False
-    params.minCircularity = 0.1
+    params.filterByCircularity = True
+    params.minCircularity = 0.5
     # Filter by Convexity
     params.filterByConvexity = False
     params.minConvexity = 0.87
@@ -294,16 +303,20 @@ def find_colonies3(img):
     return keypoints
 
 
-OUTPUT_DIR = r"C:\code\colony-profile\output\cfu4good"
+OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\JL"
 #PATH_NAME = r"V:\2\Camera\5\IMG_20151125_182927.jpg" # single plate (on stand)
 #PATH_NAME = r"V:\2\Camera\5\IMG_20151125_183446.jpg"  # two plates (left one cut)
-#PATH_NAME = r"c:\Users\refael\Downloads\2015-11-29.jpg"  # small cut plate
-# PATH_NAME = r"V:\2\Camera\1\IMG_20151104_165813.jpg"  # tiny plate
+#PATH_NAME = r"V:\2\Camera\1\IMG_20151104_165813.jpg"  # tiny plate
 #PATH_NAME = r"V:\2\Camera\2\IMG_20151104_171622.jpg"  # tiny plate
-#PATH_NAME = r"C:\code\colony-profile\c4\IMG_2670.JPG"  # Lizi
-PATH_NAME = r"C:\code\colony-profile\c4\IMG_2942.JPG"  # Christina
 #PATH_NAME = r"V:\2\Camera\2\IMG_20151104_171616.jpg"  # small plate
 #PATH_NAME = r"V:\2\Camera\4\IMG_20151105_142456_data.jpg"
+#PATH_NAME = r"c:\Users\refael\Downloads\2015-11-29.jpg"  # small cut plate
+#PATH_NAME = r"C:\code\colony-profile\c4\IMG_2670.JPG"  # Lizi
+#PATH_NAME = r"C:\code\colony-profile\c4\IMG_2942.JPG"  # Christina
+#PATH_NAME = r"C:\code\colony-profile\c4\2015-12-11.png"  # 2015-12-11
+#PATH_NAME = r"C:\code\colony-profile\c4\IMG_0649.JPG"  # insane
+#PATH_NAME = r"C:\code\colony-profile\c4\2015-12-18 14.50.04.jpg"  # 72 lawn
+PATH_NAME = r"C:\code\6broad\.data\JL\IMG_20160220_130925_data.jpg" # Z fresh
 
 # IMGs = [
 # r"V:\2\Camera\5\IMG_20151125_182156.jpg",
@@ -316,18 +329,18 @@ PATH_NAME = r"C:\code\colony-profile\c4\IMG_2942.JPG"  # Christina
 def blowup(img):
     pre = img
     split = mycv2.split(img)
-    clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(20,20))
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(10,10))
     b_split = [clahe.apply(c) for c in split]
-    # b16 = numpy.multiply(b_split, b_split, dtype=numpy.uint16)
-    # b8 = (b16 >> 8).astype(numpy.uint8)
-    # b_split = [clahe.apply(c) for c in b8]
     img = cv2.merge(b_split)
-    Helper.log('blowup', [pre, img])
     l = mycv2.cvtColor(img, cv2.COLOR_BGR2HLS_FULL)[:,:,1]
     l = deluminate(l)
-    th, mask = cv2.threshold(l, 128, 255, cv2.THRESH_BINARY)
-    l2 = cv2.multiply(l, mask/200)
-    Helper.log('blowup', [l, mask, l2, cv2.subtract(l, l2)])
+    per50 = numpy.percentile(l, 50)
+    Helper.logText("per25 %d" % per50)
+    th, mask = cv2.threshold(l, 64, 255, cv2.THRESH_BINARY)
+    mask2 = cv2.erode(mask, None, iterations=4)
+    mask3 = cv2.dilate(mask2, None, iterations=7)
+    l2 = cv2.multiply(l, mask3/255)
+    Helper.log('blowup', [pre, img, l, mask, mask2, mask3, l2, cv2.subtract(l, l2)])
     return l2, img
 
 
@@ -336,25 +349,28 @@ if orig.shape[0] < orig.shape[1]:
     orig = mycv2.transpose(orig)
 blown_bw, blown_color = blowup(orig)
 
-
-
-exit(0)
-
 rois = findROIs(blown_bw, blown_color)
 roi_bw, roi_color, cropped = rois[0]
-Helper.log('found ROI', roi_color)
-
-find_colonies3(roi_bw)
-
-colonies2 = find_colonies2(roi_bw, roi_color)
+Helper.log('found ROI', [roi_color, roi_bw])
 chans = cv2.split(roi_color)
-colonies2 = mycv2.merge([chans[0], chans[1], mycv2.add(chans[2], colonies2)])
-Helper.log('colonies 2', colonies2)
+
+# find_colonies3(roi_bw)
+
+# colonies2 = find_colonies2(roi_bw, roi_color)
+# colonies2 = mycv2.merge([mycv2.subtract(chans[0], colonies2), mycv2.subtract(chans[1], colonies2), mycv2.add(chans[2], colonies2)])
+# Helper.log('colonies 2', colonies2)
+
+#colonies4 = find_colonies4(roi_bw, roi_color)
+#colonies4 = mycv2.merge([mycv2.subtract(chans[0], colonies4), mycv2.subtract(chans[1], colonies4), mycv2.add(chans[2], colonies4)])
+#Helper.log('colonies 4', colonies4)
 
 colonies1 = find_colonies1(roi_bw, roi_color)
-Helper.log('colonies 1', colonies1)
-colonies2 = mycv2.merge([mycv2.add(chans[0], colonies1), chans[1], chans[2]])
-Helper.log('colonies 1', colonies1)
+color2 = roi_color.copy()
+color2[colonies1 == -1] = [255,0,0]
+colonies1_merged = mycv2.merge([mycv2.subtract(chans[0], colonies1), mycv2.add(chans[1], colonies1), mycv2.subtract(chans[2], colonies1)])
+Helper.log('colonies 1', [roi_color, color2, colonies1, colonies1_merged])
+Helper.log('colonies 1', colonies1_merged)
+
 
 # max10 = (pow(2, 10) - 1)
 # max16 = (pow(2, 16) - 1)
