@@ -13,81 +13,14 @@ import scipy.ndimage as scind
 import logging
 
 DILATOR_SIZE = 100
-
-
-def find_colonies2(roi, roi_color, min_rad=12, max_rad=15):
-    #    blurred = mycv2.blur(roi, (10,10))
-    #    thr_clp = mycv2.Canny(blurred, 20, 100)
-    circles = mycv2.HoughCircles(roi, mycv2.HOUGH_GRADIENT, 6, min_rad, param1=250, param2=45, minRadius=min_rad,
-                                 maxRadius=max_rad)[0]
-    Helper.logText('number of circles (colonies): {0}', circles.shape[0])
-    circles = circles.astype(numpy.uint16)
-    cols = numpy.zeros(roi.shape, dtype=numpy.int32)
-    for c in circles[:200]:
-        mycv2.circle(cols, (c[0], c[1]), c[2], 255, thickness=2)
-    #        rr, cc = skid.circle(c[1], c[0], c[2], shape=cols.shape)
-    #        cols[rr, cc] = 255
-    #        cols[c[1], c[0]] = i
-    # cols = mycv2.watershed(roi_color, cols)
-    # cols[cols < 0] = 0
-    cols = cols.astype(numpy.uint8)
-    return cols
-
-
-def find_colonies4(roi, roi_color, min_rad=8, max_rad=40):
-    _, threshold = mycv2.threshold(roi, 1, 255, mycv2.THRESH_BINARY)
-    min_tr = mycv2.erode(threshold, None, iterations=min_rad)
-    max_tr = cv2.dilate(min_tr, None, iterations=min_rad)
-    try:
-        circles = \
-        cv2.HoughCircles(max_tr, mycv2.HOUGH_GRADIENT, 1, 4 * min_rad, param1=250, param2=min_rad, minRadius=min_rad,
-                         maxRadius=max_rad)[0]
-    except:
-        circles = []
-    circles = circles.astype(numpy.uint16)
-    cols = numpy.zeros(roi.shape, dtype=numpy.uint8)
-    for c in circles:
-        mycv2.circle(cols, (c[0], c[1]), c[2], 255, thickness=2)
-    Helper.logText('number of circles (colonies): {0}', circles.shape[0])
-    Helper.log('find_colonies4', [threshold, min_tr, max_tr, cols])
-    return cols
-
-
-def find_colonies3(img):
-    # Setup SimpleBlobDetector parameters.
-    params = mycv2.SimpleBlobDetector_Params()
-    # Change thresholds
-    params.minThreshold = 0
-    params.maxThreshold = 255
-    # Filter by Area.
-    params.filterByArea = True
-    params.minArea = 10
-    # Filter by Circularity
-    params.filterByCircularity = True
-    params.minCircularity = 0.5
-    # Filter by Convexity
-    params.filterByConvexity = False
-    params.minConvexity = 0.87
-    # Filter by Inertia
-    # params.filterByInertia = True
-    # params.minInertiaRatio = 0.01
-    # Create a detector with the parameters
-    detector = mycv2.SimpleBlobDetector_create(params)
-    # Detect blobs.
-    keypoints = detector.detect(img)
-    Helper.logText('number of keypoints {0}', len(keypoints))
-    # Draw detected blobs as red circles.
-    # mycv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS ensures the size of the circle corresponds to the size of blob
-    im_with_keypoints = mycv2.drawKeypoints(img, keypoints, numpy.array([]), (0, 0, 255),
-                                            mycv2.DRAW_MATCHES_FLAGS_DRAW_RICH_KEYPOINTS)
-    Helper.log('segment_on_dt', im_with_keypoints)
-    return keypoints
+MAX_HEIGHT = 80
+MAX_WIDTH = 20
 
 
 class VisualRecord(_VisualRecord):
     def __init__(self, title, imgs, footnotes="", fmt="png"):
         if isinstance(imgs, (list, tuple, set, frozenset)):
-            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=0.125, fy=0.125) for img in imgs]
+            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=0.25, fy=0.25) for img in imgs]
         else:
             pass
             # imgs = cv2.resize(imgs.astype(numpy.uint8), None, fx=0.5, fy=0.5)
@@ -117,18 +50,18 @@ class Helper(object):
         old = cls.ts
         cls.ts = time.time()
         d = cls.ts - old
-        cls.logger.debug(VisualRecord("[%2.2f]s - " % d + msg, img, fmt="png"))
+        cls.logger.debug(VisualRecord("[{0:2.2f}]s - ".format(d) + msg, img, fmt="png"))
 
     @classmethod
     def logText(cls, msg, *args):
         old = cls.ts
         cls.ts = time.time()
         d = cls.ts - old
-        cls.logger.info("[%4.0f]ms - " % (d * 1000) + msg.format(*args) + '\t\t\t\t\t\t\t\t\t<br>')
+        cls.logger.info("[{0:4.0f}]ms - ".format(d * 1000) + msg.format(*args) + '\t\t\t\t\t\t\t\t\t<br>')
 
-    def __getattribute__(self, meth):
-        ret = object.__getattribute__(cv2, meth)
-        if not hasattr(ret, '__call__') or meth in ('waitKey', 'circle'):
+    def __getattribute__(self, met):
+        ret = object.__getattribute__(cv2, met)
+        if not hasattr(ret, '__call__') or met in ('waitKey', 'circle', 'equalizeMulti'):
             return ret
 
         def wrapped(*iargs, **ikwargs):
@@ -136,24 +69,19 @@ class Helper(object):
             i_ret = ret(*iargs, **ikwargs)
             t = time.time() - t0
             formatted_lines = traceback.format_stack()
-            Helper.logText("{0:<10} - call to {1:<20}  [{2:3}]ms", formatted_lines[-2].split(',')[1][1:], meth,
+            Helper.logText("{0:<10} - call to {1:<20}  [{2:3}]ms", formatted_lines[-2].split(',')[1][1:], met,
                            int(t * 1000))
             return i_ret
 
         return wrapped
 
+    @classmethod
+    def equalizeMulti(cls, img):
+        return cv2.merge([cv2.equalizeHist(c) for c in cv2.split(img)])
+
 
 """:type : cv2"""
 mycv2 = Helper()
-
-
-def myShow(name, img, wt=0):
-    mycv2.namedWindow(name, mycv2.WINDOW_KEEPRATIO | mycv2.WINDOW_NORMAL)
-    height = 800 if img.shape[1] > 800 else img.shape[1]
-    width = int(800.0 * img.shape[1] / img.shape[0]) if img.shape[0] > 800 else img.shape[0]
-    mycv2.resizeWindow(name, width, height)
-    mycv2.imshow(name, img)
-    mycv2.waitKey(wt)
 
 
 def block(shape, block_shape):
@@ -214,7 +142,7 @@ def blowup(img):
     l = mycv2.cvtColor(img, cv2.COLOR_BGR2HLS_FULL)[:, :, 1]
     l = deluminate(l)
     per = numpy.percentile(l, 90)
-    Helper.logText("per %d" % per)
+    Helper.logText("per {0:d}".format(per))
     th, mask = cv2.threshold(l, per, 255, cv2.THRESH_BINARY)
     mask2 = cv2.erode(mask, None, iterations=4)
     mask3 = cv2.dilate(mask2, None, iterations=7)
@@ -269,7 +197,7 @@ def refine_circle_ROI(img, img_color, hi_cont, circle, search_extend_size=50, re
         better = (r - remove_rim, r - remove_rim, circle[2])
         Helper.logText("no better roi")
     else:
-        Helper.logText("found better rois %d" % len(circles))
+        Helper.logText("found better rois {0:d}".format(len(circles)))
         better = circles[0][0].astype(numpy.uint16)
     r = better[2] - remove_rim
     c = (better[1], better[0])
@@ -287,14 +215,14 @@ def findROIs(bw, color, hi_cont):
     if circles is None:
         Helper.logText("no ROIs")
         return None
-    Helper.logText("initial number of ROIs %d" % len(circles))
+    Helper.logText("initial number of ROIs {0:d}".format(len(circles)))
     filtered_circles = circles[0].astype(numpy.int16)
     r025 = filtered_circles[0][2] / 2
     filtered_circles = filter(lambda c: c[0] > r025 and c[1] > r025, filtered_circles)
-    Helper.logText("number ROIs at least 1/4 in %d" % len(filtered_circles))
+    Helper.logText("number ROIs at least 1/4 in {0:d}".format(len(filtered_circles)))
     best_c = filtered_circles[0]
     filtered_circles = filter(lambda c: c[2] > (0.8 * best_c[2]), filtered_circles)
-    Helper.logText("number rough ROIs %d" % len(filtered_circles))
+    Helper.logText("number rough ROIs {0:d}".format(len(filtered_circles)))
     circles_left2right = sorted(filtered_circles, key=lambda c: c[2], reverse=True)
     better = [refine_circle_ROI(bw, color, hi_cont, c) for c in circles_left2right]
     info = color.copy()
@@ -303,34 +231,38 @@ def findROIs(bw, color, hi_cont):
     return better
 
 
-def find_colonies1(roi, roi_color):
+def find_colonies1(roi):
     global FILE_NAME
     _, threshold = mycv2.threshold(roi, 1, 255, mycv2.THRESH_BINARY)
     morphology = mycv2.morphologyEx(threshold, mycv2.MORPH_OPEN, numpy.ones((3, 3), dtype=int))
-    border = mycv2.erode(morphology, None, iterations=3)
-    dt = mycv2.distanceTransform(border, 2, 3).astype(numpy.uint8)
-    dt = mycv2.equalizeHist(dt)
-    _, dt_trash = mycv2.threshold(dt, 100, 255, mycv2.THRESH_BINARY)
+    border = mycv2.erode(morphology, None, iterations=1)
+    dt = mycv2.distanceTransform(border, cv2.DIST_L1, cv2.DIST_MASK_5).astype(numpy.uint8)
+    _, dt_trash = mycv2.threshold(dt, 8, 255, mycv2.THRESH_BINARY)
     __, markers, stats, centroids = mycv2.connectedComponentsWithStats(dt_trash, connectivity=4)
-    stats = [list(s) + [(s[2] * s[3] * math.pi) / (s[4] * 4.0)] for s in stats[1:]]
-    centroids = centroids[1:]
-    Helper.log('distanceTransform', [morphology, border, dt, dt_trash, markers])
-    return markers, stats, centroids
+    ret = [list(c) + list(s) for c, s in zip(centroids, stats)]
+    vis_mark = mycv2.add(markers % 128, 128)
+    vis_mark[markers == 0] = 0
+    Helper.log('distanceTransform dt_trash', [roi, threshold, morphology, border, dt, dt_trash, vis_mark])
+    return markers, ret
 
 
-def churn(roi, markers, stats, centroids):
-    stats = [{
-        'i': i,
-        'x': c[0],
-        'y': c[1],
-        'width': s[2],
-        'height': s[3],
-        'area': s[4],
-        'roundness': s[5],
-        'size': (s[4] > 80),
-        'round': (abs(s[5] - 1) < 0.1)
-    } for c, s, i in zip(centroids, stats, range(1, len(stats) + 1))]
-    count = reduce(lambda a, s: a + (s['size'] and s['round']), stats, 0)
+def churn(roi, markers, stats):
+    def md(idx, s):
+        r = (s[4] * s[5] * math.pi) / (s[6] * 4.0)
+        return {
+            'i': idx,
+            'cx': int(s[0]),
+            'cy': int(s[1]),
+            'width': s[4],
+            'height': s[5],
+            'area': s[6],
+            'roundness': r,
+            'size': (s[6] > 80),
+            'round': (abs(r - 1) < 0.1)
+        }
+    stats = [md(i, s1) for i, s1 in enumerate(stats)]
+    stats.pop(0)
+    count = reduce(lambda a, s2: a + (s2['size'] and s2['round']), stats, 0)
     red = numpy.zeros(roi.shape[:2], dtype=numpy.uint8)
     green = numpy.zeros(roi.shape[:2], dtype=numpy.uint8)
     for s in stats:
@@ -339,10 +271,15 @@ def churn(roi, markers, stats, centroids):
     Helper.logText("made tags")
 
     chans = mycv2.split(roi)
-    chans = [mycv2.subtract(chans[0], green + red), mycv2.subtract(chans[1], -green + red), mycv2.subtract(chans[2], green + -red)]
+    chans = [
+        mycv2.subtract(chans[0], green + red),
+        mycv2.subtract(chans[1], -green + red),
+        mycv2.subtract(chans[2], green + -red)
+    ]
     roi_marked = mycv2.merge(chans)
 
-    xlsx_ = os.path.join(OUTPUT_DIR, '.'.join([FILE_NAME, "_%.0f"%(time.time() * 10 % 10000), "[%d]" % count, 'xlsx']))
+    new_name = '.'.join([FILE_NAME, "_{0:.0f}".format(time.time() * 10 % 10000), u"[{0:d}]".format(count), 'xlsx'])
+    xlsx_ = os.path.join(OUTPUT_DIR, new_name)
     workbook = xlsxwriter.Workbook(xlsx_)
     workbook.default_format_properties['valign'] = 'top'
     worksheet = workbook.add_worksheet()
@@ -351,14 +288,15 @@ def churn(roi, markers, stats, centroids):
     xfmt_red.set_font_color('red')
     xfmt_megenta = workbook.add_format()
     xfmt_megenta.set_font_color('magenta')
-    MAX_HEIGHT = 80
-    MAX_WIDTH = 20
     worksheet.set_column(8, 9, MAX_WIDTH + 4)
     Helper.logText("prepare excel")
 
     for s in stats:
-        slc = cv2.getRectSubPix(roi_color, (s['width'] + 10, s['height'] + 10), (s['x'], s['y']))
-        slcm = cv2.getRectSubPix(roi_marked, (s['width'] + 10, s['height'] + 10), (s['x'], s['y']))
+        slc = cv2.getRectSubPix(roi_color, (s['width'] + 10, s['height'] + 10), (s['cx'], s['cy']))
+        slc = Helper.equalizeMulti(slc)
+        slcmm = cv2.split(slc)
+        slc = cv2.min(slcmm[0], cv2.min(slcmm[1], slcmm[2]))
+        slcm = cv2.getRectSubPix(roi_marked, (s['width'] + 10, s['height'] + 10), (s['cx'], s['cy']))
         _, buf1 = cv2.imencode('.jpg', slc)
         _, buf2 = cv2.imencode('.jpg', slcm)
         image_data1 = io.BytesIO(buf1)
@@ -374,8 +312,8 @@ def churn(roi, markers, stats, centroids):
         fmt = xfmt if s['round'] else xfmt_megenta
         fmt = fmt if s['size'] else xfmt_red
         worksheet.set_row(s['i'], MAX_HEIGHT + 4, fmt)
-        worksheet.write_number(s['i'], 0, s['x'])
-        worksheet.write_number(s['i'], 1, s['y'])
+        worksheet.write_number(s['i'], 0, s['cx'])
+        worksheet.write_number(s['i'], 1, s['cy'])
         worksheet.write_number(s['i'], 2, s['width'])
         worksheet.write_number(s['i'], 3, s['height'])
         worksheet.write_number(s['i'], 4, s['area'])
@@ -413,11 +351,30 @@ def churn(roi, markers, stats, centroids):
     worksheet3.insert_image(0, 0, 'raw', {'image_data': image_data_raw, 'positioning': 2})
     worksheet3.set_zoom(50)
 
+    cs = cv2.split(roi)
+    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(20, 20))
+    cs = [clahe.apply(c) for c in cs]
+    roi2 = cv2.min(cs[0], cv2.min(cs[1], cs[2]))
+    _, buf_raw = cv2.imencode('.jpg', roi2)
+    image_data_raw = io.BytesIO(buf_raw)
+    worksheet3 = workbook.add_worksheet()
+    worksheet3.insert_image(0, 0, 'raw', {'image_data': image_data_raw, 'positioning': 2})
+    worksheet3.set_zoom(50)
+
+    laplacian = cv2.Laplacian(roi, cv2.CV_64F)
+    Helper.log("laplacian", laplacian)
+    sobelx = cv2.Sobel(roi,cv2.CV_64F,1,0,ksize=5)
+    Helper.log("sobelx", sobelx)
+    sobely = cv2.Sobel(roi,cv2.CV_64F,0,1,ksize=5)
+    Helper.log("sobely", sobely)
+    sobelxy = cv2.Sobel(roi,cv2.CV_64F,1,1,ksize=5)
+    Helper.log("sobelxy", sobelxy)
+
     workbook.close()
     Helper.logText("saved excel")
 
     # markers_ws = mycv2.watershed(roi_color, markers)
-    Helper.logText("number = %d" % count)
+    Helper.logText(u"number = {0:d}".format(count))
     # cols = cv2.watershed(roi_color, dt_trash)
     return roi_marked
 
@@ -446,8 +403,8 @@ OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # r"V:\2\Camera\5\IMG_20151125_182228.jpg",
 # ]
 DIR_NAME = r"V:\2\CFU\RB\images_for_Refael"
-for f in os.listdir(DIR_NAME):
-    Helper.logText("*************** %s ***************" % f)
+for f in os.listdir(DIR_NAME)[1:2]:
+    Helper.logText("*************** {0:s} ***************".format(f))
     PATH_NAME = os.path.join(DIR_NAME, f)
     FILE_NAME, _ext = os.path.splitext(f)
     orig = mycv2.imread(PATH_NAME)
@@ -459,7 +416,7 @@ for f in os.listdir(DIR_NAME):
     roi_bw, roi_color = rois[0]
     Helper.log('found ROI', [roi_color, roi_bw])
 
-    mrk, st, cs = find_colonies1(roi_bw, roi_color)
-    colonies1_merged = churn(roi_color, mrk, st, cs)
+    mrk, st = find_colonies1(roi_bw)
+    colonies1_merged = churn(roi_color, mrk, st)
     Helper.log(PATH_NAME, colonies1_merged)
 
