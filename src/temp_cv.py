@@ -7,23 +7,35 @@ import io
 import cv2
 import numpy
 import os
+import random
 from logging import FileHandler
 from vlogging import VisualRecord as _VisualRecord
 import scipy.ndimage as scind
 import logging
 
 DILATOR_SIZE = 100
-MAX_HEIGHT = 80
+MAX_HEIGHT = 40
 MAX_WIDTH = 20
 
 
 class VisualRecord(_VisualRecord):
     def __init__(self, title, imgs, footnotes="", fmt="png"):
         if isinstance(imgs, (list, tuple, set, frozenset)):
-            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=0.25, fy=0.25) for img in imgs]
+            multi = True
+        else:
+            imgs = [imgs]
+            multi = False
+
+        if max(imgs[0].shape[:2]) < 500:
+            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=2, fy=2) for img in imgs]
+
+        if multi:
+            if max(imgs[0].shape[:2]) > 1000:
+                imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=0.125, fy=0.125) for img in imgs]
         else:
             pass
             # imgs = cv2.resize(imgs.astype(numpy.uint8), None, fx=0.5, fy=0.5)
+
         _VisualRecord.__init__(self, title, imgs, footnotes, fmt)
 
 
@@ -136,12 +148,12 @@ def preprocess(img, block_size):
 def blowup(img):
     pre = img
     split = mycv2.split(img)
-    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(10, 10))
+    clahe = cv2.createCLAHE(clipLimit=1.0, tileGridSize=(10, 10))
     b_split = [clahe.apply(c) for c in split]
     img = cv2.merge(b_split)
     l = mycv2.cvtColor(img, cv2.COLOR_BGR2HLS_FULL)[:, :, 1]
     l = deluminate(l)
-    per = numpy.percentile(l, 90)
+    per = numpy.percentile(l, 90).astype(int)
     Helper.logText("per {0:d}".format(per))
     th, mask = cv2.threshold(l, per, 255, cv2.THRESH_BINARY)
     mask2 = cv2.erode(mask, None, iterations=4)
@@ -171,103 +183,83 @@ def deluminate(img, rad=70):
     return normalized
 
 
-def crop(img, r, c):
-    clip = mycv2.getRectSubPix(img, (2*r, 2*r), c)
-    color = 1 if len(img.shape) < 3 else (1,1,1)
-    neg = clip.copy()
-    mycv2.circle(neg, (r, r), r, color, -1)
-    cropped2 = mycv2.subtract(clip, neg)
-    Helper.log("crop", [clip, neg, cropped2])
-    return cropped2
-
-
-def refine_circle_ROI(img, img_color, hi_cont, circle, search_extend_size=50, remove_rim=50):
-    r = circle[2] + search_extend_size
-    r2 = r * 2
-    c = tuple(circle[:2])
-    clipped = mycv2.getRectSubPix(img, (r2, r2), c)
-    clip_color = mycv2.getRectSubPix(img_color, (r2, r2), c)
-    clip_hi_cont = mycv2.getRectSubPix(hi_cont, (r2, r2), c)
-    norm_closed = mycv2.equalizeHist(clipped)
-    Helper.log("refine_circle_ROI 1", [clipped, clip_color, norm_closed])
-    circles = mycv2.HoughCircles(clip_hi_cont, mycv2.HOUGH_GRADIENT, 1, r,
-                                 param1=255, param2=4 * r,
-                                 minRadius=circle[2] - search_extend_size, maxRadius=r + search_extend_size)
-    if circles is None:
-        better = (r - remove_rim, r - remove_rim, circle[2])
-        Helper.logText("no better roi")
-    else:
-        Helper.logText("found better rois {0:d}".format(len(circles)))
-        better = circles[0][0].astype(numpy.uint16)
-    r = better[2] - remove_rim
-    c = (better[1], better[0])
-    clipped_bw = crop(norm_closed, r, c)
-    clip_color = crop(clip_color, r, c)
-    clipped_bw = mycv2.equalizeHist(clipped_bw)
-    return clipped_bw, clip_color
-
-
-def findROIs(bw, color, hi_cont):
-    min_r = min(bw.shape[:2]) / 4
-    circles = mycv2.HoughCircles(hi_cont, mycv2.HOUGH_GRADIENT, 64, 2*min_r,
+def findROIs(img):
+    min_r = min(img.shape[:2]) / 4
+    circles = mycv2.HoughCircles(img, mycv2.HOUGH_GRADIENT, 64, 2 * min_r,
                                  param1=255, param2=4 * min_r,
                                  minRadius=min_r, maxRadius=3 * min_r)
     if circles is None:
         Helper.logText("no ROIs")
         return None
-    Helper.logText("initial number of ROIs {0:d}".format(len(circles)))
+    Helper.logText("initial number of ROIs - {0:d}".format(len(circles)))
     filtered_circles = circles[0].astype(numpy.int16)
     r025 = filtered_circles[0][2] / 2
     filtered_circles = filter(lambda c: c[0] > r025 and c[1] > r025, filtered_circles)
-    Helper.logText("number ROIs at least 1/4 in {0:d}".format(len(filtered_circles)))
+    Helper.logText("number ROIs at least 1/2 r - {0:d}".format(len(filtered_circles)))
+    filtered_circles = filter(lambda c: c[0] + c[2] < img.shape[1] + (c[2] / 5) and c[1] + c[2] < img.shape[0] + (c[2] / 5), filtered_circles)
+    Helper.logText("number ROIs at least 80% in - {0:d}".format(len(filtered_circles)))
     best_c = filtered_circles[0]
     filtered_circles = filter(lambda c: c[2] > (0.8 * best_c[2]), filtered_circles)
     Helper.logText("number rough ROIs {0:d}".format(len(filtered_circles)))
     circles_left2right = sorted(filtered_circles, key=lambda c: c[2], reverse=True)
-    better = [refine_circle_ROI(bw, color, hi_cont, c) for c in circles_left2right]
-    info = color.copy()
-    mycv2.circle(info, (best_c[0], best_c[1]), best_c[2], (0, 255, 0), thickness=2)
-    Helper.log("best ROI", [info])
-    return better
+    ret = [{'c': (c[0], c[1]), 'r': c[2]} for c in circles_left2right]
+    return ret
+
+
+def cropROI(img, ROI):
+    info = img.copy()
+    mycv2.circle(info, ROI['c'], ROI['r'], (0, 255, 0), thickness=4)
+    clip = mycv2.getRectSubPix(img, (2 * ROI['r'], 2 * ROI['r']), ROI['c'])
+    color = 1 if len(img.shape) < 3 else (1, 1, 1)
+    neg = clip.copy()
+    mycv2.circle(neg, (ROI['r'], ROI['r']), ROI['r'], color, -1)
+    cropped2 = mycv2.subtract(clip, neg)
+    Helper.log("crop", [info, clip, neg, cropped2])
+    return cropped2
+
 
 
 def find_colonies1(roi):
     global FILE_NAME
-    _, threshold = mycv2.threshold(roi, 1, 255, mycv2.THRESH_BINARY)
+    _, threshold = mycv2.threshold(roi, 64, 255, mycv2.THRESH_BINARY)
     morphology = mycv2.morphologyEx(threshold, mycv2.MORPH_OPEN, numpy.ones((3, 3), dtype=int))
-    border = mycv2.erode(morphology, None, iterations=1)
-    dt = mycv2.distanceTransform(border, cv2.DIST_L1, cv2.DIST_MASK_5).astype(numpy.uint8)
-    _, dt_trash = mycv2.threshold(dt, 8, 255, mycv2.THRESH_BINARY)
+    border = morphology # mycv2.erode(morphology, None, iterations=1)
+    dt = mycv2.distanceTransform(border, cv2.DIST_L1, cv2.DIST_MASK_3).astype(numpy.uint8)
+    _, dt_trash = mycv2.threshold(dt, 4, 255, mycv2.THRESH_BINARY)
     __, markers, stats, centroids = mycv2.connectedComponentsWithStats(dt_trash, connectivity=4)
+    image, contours, hierarchy = cv2.findContours(dt_trash, cv2.CHAIN_APPROX_NONE, cv2.RETR_LIST)
     ret = [list(c) + list(s) for c, s in zip(centroids, stats)]
-    vis_mark = mycv2.add(markers % 128, 128)
+    vis_mark = cv2.applyColorMap(markers, colormap=cv2.COLORMAP_HSV)
     vis_mark[markers == 0] = 0
-    Helper.log('distanceTransform dt_trash', [roi, threshold, morphology, border, dt, dt_trash, vis_mark])
+    Helper.log('distanceTransform dt_trash', [roi, threshold, morphology, border, cv2.equalizeHist(dt), dt_trash, vis_mark])
     return markers, ret
 
 
 def churn(roi, markers, stats):
     def md(idx, s):
-        r = (s[4] * s[5] * math.pi) / (s[6] * 4.0)
+        r = math.log((s[4] * s[5] * math.pi) / (s[6] * 4.0), 1.1)
         return {
-            'i': idx,
+            'tag': idx,
             'cx': int(s[0]),
             'cy': int(s[1]),
             'width': s[4],
             'height': s[5],
             'area': s[6],
             'roundness': r,
-            'size': (s[6] > 80),
-            'round': (abs(r - 1) < 0.1)
+            'size': (s[6] > 50),
+            'round': abs(r) < 1.25
         }
     stats = [md(i, s1) for i, s1 in enumerate(stats)]
+    stats = filter(lambda s: s['area'] > 10 and s['roundness'] < 4, stats)
     stats.pop(0)
     count = reduce(lambda a, s2: a + (s2['size'] and s2['round']), stats, 0)
+    Helper.logText("normalize stats")
+
     red = numpy.zeros(roi.shape[:2], dtype=numpy.uint8)
     green = numpy.zeros(roi.shape[:2], dtype=numpy.uint8)
     for s in stats:
         tag = green if s['size'] and s['round'] else red
-        tag[markers == s['i']] = 255
+        tag[markers == s['tag']] = 255
     Helper.logText("made tags")
 
     chans = mycv2.split(roi)
@@ -278,11 +270,12 @@ def churn(roi, markers, stats):
     ]
     roi_marked = mycv2.merge(chans)
 
-    new_name = '.'.join([FILE_NAME, "_{0:.0f}".format(time.time() * 10 % 10000), u"[{0:d}]".format(count), 'xlsx'])
+    new_name = '.'.join([FILE_NAME, "_{0:4d}".format(int(time.time()) % 10000), u"[{0:d}]".format(count), 'xlsx'])
     xlsx_ = os.path.join(OUTPUT_DIR, new_name)
     workbook = xlsxwriter.Workbook(xlsx_)
     workbook.default_format_properties['valign'] = 'top'
     worksheet = workbook.add_worksheet()
+    worksheet.set_zoom(200)
     xfmt = workbook.add_format()
     xfmt_red = workbook.add_format()
     xfmt_red.set_font_color('red')
@@ -291,12 +284,14 @@ def churn(roi, markers, stats):
     worksheet.set_column(8, 9, MAX_WIDTH + 4)
     Helper.logText("prepare excel")
 
-    for s in stats:
+    for i, s in enumerate(stats, 1):
+        blue = numpy.zeros(roi.shape[:2], dtype=numpy.uint8)
+        blue[markers == s['tag']] = 1
+        blue = cv2.getRectSubPix(blue, (s['width'] + 10, s['height'] + 10), (s['cx'], s['cy']))
         slc = cv2.getRectSubPix(roi_color, (s['width'] + 10, s['height'] + 10), (s['cx'], s['cy']))
-        slc = Helper.equalizeMulti(slc)
-        slcmm = cv2.split(slc)
-        slc = cv2.min(slcmm[0], cv2.min(slcmm[1], slcmm[2]))
-        slcm = cv2.getRectSubPix(roi_marked, (s['width'] + 10, s['height'] + 10), (s['cx'], s['cy']))
+        slceq = Helper.equalizeMulti(slc)
+        merged = cv2.merge([blue*255, -blue*192, -blue*192])
+        slcm = cv2.subtract(slceq, -merged)
         _, buf1 = cv2.imencode('.jpg', slc)
         _, buf2 = cv2.imencode('.jpg', slcm)
         image_data1 = io.BytesIO(buf1)
@@ -304,22 +299,22 @@ def churn(roi, markers, stats):
         image_arg1 = {'image_data': image_data1, 'positioning': 1}
         image_arg2 = {'image_data': image_data2, 'positioning': 1}
         if s['height'] > MAX_HEIGHT or s['width'] / 8 > MAX_WIDTH:
-            fact_h = MAX_HEIGHT / (s['height'] + 10.0)
-            fact_w = (MAX_WIDTH * 8) / (s['width'] + 10.0)
+            fact_h = MAX_HEIGHT / (s['height'] + 6.0)
+            fact_w = (MAX_WIDTH * 8) / (s['width'] + 6.0)
             image_arg1['x_scale'] = image_arg1['y_scale'] = image_arg2['x_scale'] = image_arg2['y_scale'] = min(fact_h, fact_w)
-        worksheet.insert_image(s['i'], 8, str(s['i']), image_arg1)
-        worksheet.insert_image(s['i'], 9, str(s['i']), image_arg2)
+        worksheet.insert_image(i, 8, str(i), image_arg1)
+        worksheet.insert_image(i, 9, str(i), image_arg2)
         fmt = xfmt if s['round'] else xfmt_megenta
         fmt = fmt if s['size'] else xfmt_red
-        worksheet.set_row(s['i'], MAX_HEIGHT + 4, fmt)
-        worksheet.write_number(s['i'], 0, s['cx'])
-        worksheet.write_number(s['i'], 1, s['cy'])
-        worksheet.write_number(s['i'], 2, s['width'])
-        worksheet.write_number(s['i'], 3, s['height'])
-        worksheet.write_number(s['i'], 4, s['area'])
-        worksheet.write_number(s['i'], 5, s['roundness'])
-        worksheet.write_boolean(s['i'], 6, s['size'])
-        worksheet.write_boolean(s['i'], 7, s['round'])
+        worksheet.set_row(i, MAX_HEIGHT + 4, fmt)
+        worksheet.write_number(i, 0, s['cx'])
+        worksheet.write_number(i, 1, s['cy'])
+        worksheet.write_number(i, 2, s['width'])
+        worksheet.write_number(i, 3, s['height'])
+        worksheet.write_number(i, 4, s['area'])
+        worksheet.write_number(i, 5, s['roundness'])
+        worksheet.write_boolean(i, 6, s['size'])
+        worksheet.write_boolean(i, 7, s['round'])
 
     worksheet.add_table(0, 0, len(stats), 9, {
         'banded_rows': False,
@@ -351,27 +346,8 @@ def churn(roi, markers, stats):
     worksheet3.insert_image(0, 0, 'raw', {'image_data': image_data_raw, 'positioning': 2})
     worksheet3.set_zoom(50)
 
-    cs = cv2.split(roi)
-    clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(20, 20))
-    cs = [clahe.apply(c) for c in cs]
-    roi2 = cv2.min(cs[0], cv2.min(cs[1], cs[2]))
-    _, buf_raw = cv2.imencode('.jpg', roi2)
-    image_data_raw = io.BytesIO(buf_raw)
-    worksheet3 = workbook.add_worksheet()
-    worksheet3.insert_image(0, 0, 'raw', {'image_data': image_data_raw, 'positioning': 2})
-    worksheet3.set_zoom(50)
-
-    laplacian = cv2.Laplacian(roi, cv2.CV_64F)
-    Helper.log("laplacian", laplacian)
-    sobelx = cv2.Sobel(roi,cv2.CV_64F,1,0,ksize=5)
-    Helper.log("sobelx", sobelx)
-    sobely = cv2.Sobel(roi,cv2.CV_64F,0,1,ksize=5)
-    Helper.log("sobely", sobely)
-    sobelxy = cv2.Sobel(roi,cv2.CV_64F,1,1,ksize=5)
-    Helper.log("sobelxy", sobelxy)
-
     workbook.close()
-    Helper.logText("saved excel")
+    Helper.logText(u"saved excel {0:s}".format(new_name))
 
     # markers_ws = mycv2.watershed(roi_color, markers)
     Helper.logText(u"number = {0:d}".format(count))
@@ -403,7 +379,23 @@ OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # r"V:\2\Camera\5\IMG_20151125_182228.jpg",
 # ]
 DIR_NAME = r"V:\2\CFU\RB\images_for_Refael"
-for f in os.listdir(DIR_NAME)[1:2]:
+files = os.listdir(DIR_NAME)
+# random.shuffle(files)
+# files = ['E072_f5.JPG']
+
+def method_name(tag, img, roi3):
+    roi32 = Helper.equalizeMulti(roi3)
+    img = numpy.absolute(img).astype(numpy.uint8)
+    sobelxc = cv2.split(img)
+    sobelx1 = Helper.equalizeMulti(img)
+    sobelx2 = reduce(lambda s, c: cv2.min(s, c), sobelxc, cv2.multiply(numpy.ones(img.shape[:2], dtype=numpy.uint8), 255))
+    sobelx2 = Helper.equalizeMulti(sobelx2)
+    sobelx3 = reduce(lambda s, c: cv2.max(s, c), sobelxc, numpy.ones(img.shape[:2], dtype=numpy.uint8))
+    sobelx3 = Helper.equalizeMulti(sobelx3)
+    Helper.log(tag + ": orig, origeq, [eq, cast, eq2m, min, max]", [roi3, roi32] + [Helper.equalizeMulti(c) for c in sobelxc] + [img, sobelx1, sobelx2, sobelx3])
+
+
+for f in files:
     Helper.logText("*************** {0:s} ***************".format(f))
     PATH_NAME = os.path.join(DIR_NAME, f)
     FILE_NAME, _ext = os.path.splitext(f)
@@ -412,11 +404,22 @@ for f in os.listdir(DIR_NAME)[1:2]:
         orig = mycv2.transpose(orig)
     blown_bw, blown_color, hi_cont = blowup(orig)
     Helper.log('blowup', [blown_bw, blown_color, hi_cont])
-    rois = findROIs(blown_bw, blown_color, hi_cont)
-    roi_bw, roi_color = rois[0]
-    Helper.log('found ROI', [roi_color, roi_bw])
+    rois = findROIs(hi_cont)
+    roi = rois[0]
+    roi_bw = cropROI(blown_bw, roi)
+    roi_color = cropROI(orig, roi)
+    roi_color_blown = cropROI(blown_color, roi)
+    roi_hi_cont = cropROI(hi_cont, roi)
+    Helper.log("rois", [roi_bw, roi_color, roi_color_blown, roi_hi_cont])
+    # roi2 = cv2.getRectSubPix(roi_color, (100, 100), (1026, 1255))
+    # roihsl = cv2.cvtColor(roi2, cv2.COLOR_BGR2HLS_FULL)
+    # split = cv2.split(roihsl)
+    # for sat in split:
+    #     sat1 = Helper.equalizeMulti(sat)
+    #     slices = [cv2.threshold(sat1, i, 255, cv2.THRESH_BINARY)[1] for i in range(192, 256)]
+    #     Helper.log("roi2, sat, sat1...", [roi2, sat, sat1] + slices)
 
-    mrk, st = find_colonies1(roi_bw)
+    mrk, st = find_colonies1(roi_hi_cont)
     colonies1_merged = churn(roi_color, mrk, st)
-    Helper.log(PATH_NAME, colonies1_merged)
+    Helper.log(PATH_NAME , colonies1_merged)
 
