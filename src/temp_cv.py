@@ -7,7 +7,7 @@ import io
 import cv2
 import numpy
 import os
-
+import pandas
 
 DILATOR_SIZE = 100
 MAX_HEIGHT = 40.0
@@ -111,12 +111,15 @@ def find_colonies1(img):
 
     # labels, stats = segment3(masked_img, masked_markers)
     markers_after_watershed = mycv2.watershed(masked_img_eq, masked_markers)
-    markers_bin = numpy.zeros(gray.shape, dtype=numpy.int32)
+    Helper.log_pics([markers_after_watershed])
+    markers_bin = numpy.zeros(gray.shape, dtype=numpy.uint8)
     markers_bin[markers_after_watershed < 2] = 255
-    Helper.log('markers_after_watershed', markers_bin)
     Helper.log_overlay(img, markers_bin)
+    markers_bin2 = cv2.morphologyEx(markers_bin, cv2.MORPH_OPEN, K_CIRC_11)
+    Helper.log_overlay(img, markers_bin2)
+    Helper.log('markers diff', [cv2.absdiff(markers_bin, markers_bin2)])
 
-    stats = ContourStats.find_contours(markers_bin, lambda r: r.is_internal and r.is_external and 8 < r.area < 1e4)
+    stats = ContourStats.find_contours(markers_bin2, lambda r: 8 < r.area < 3000)
     stats.sort(key=lambda r: r.area, reverse=True)
     outlines = numpy.zeros(img.shape, numpy.int8)
     for i, s in enumerate(stats):
@@ -134,7 +137,9 @@ def churn(roi, stats):
     img_eq = roi
     roi_marked = img_eq.copy()
 
-    workbook = xlsxwriter.Workbook(Helper.OUTPUT_PREFIX + '.xlsx')
+    # By setting the 'engine' in the ExcelWriter constructor.
+    writer = pandas.ExcelWriter(Helper.OUTPUT_PREFIX + '.xlsx', engine='xlsxwriter')
+    workbook = writer.book
     workbook.default_format_properties['valign'] = 'top'
     worksheet = workbook.add_worksheet()
     worksheet.set_zoom(200)
@@ -146,12 +151,11 @@ def churn(roi, stats):
     xfmt_bold = workbook.add_format()
     xfmt_bold.set_font_color('green')
     xfmt_bold.set_bold(True)
-    worksheet.set_column(7, 8, MAX_WIDTH)
+    worksheet.set_column(7, 7, MAX_WIDTH)
     Helper.logText("prepare excel")
 
     cp = roi.copy()
-    cv2.drawContours(cp, map(lambda s:s.contour, stats), -1, (0, 255, 0))
-    cv2.imwrite(OUTPUT_DIR + '\\markers2.png', cp)
+    cv2.drawContours(cp, map(lambda s:s.contour, stats), -1, (255, 0, 0), thickness=1, lineType=cv2.LINE_8)
 
     red2 = []
     green2 = []
@@ -167,24 +171,11 @@ def churn(roi, stats):
         )
         cv2.putText(roi_marked, str(i), label_point, cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), thickness=2)
         slc = cv2.getRectSubPix(img_eq, (s.width + RECT_SUB_PIX_PADDING, s.height + RECT_SUB_PIX_PADDING), (s.cx, s.cy))
-        slc_m = slc.copy()
         one_side_padding = RECT_SUB_PIX_PADDING / 2
         offset = (s.offset[0] + one_side_padding, s.offset[1] + one_side_padding)
-        cv2.drawContours(slc_m, [s.contour], -1, (255, 0, 0), thickness=1, offset=offset)
-        __, buf1 = cv2.imencode('.jpg', slc)
-        ___, buf2 = cv2.imencode('.jpg', slc_m)
-        image_data1 = io.BytesIO(buf1)
-        image_data2 = io.BytesIO(buf2)
-        image_arg1 = {'image_data': image_data1, 'positioning': 1}
-        image_arg2 = {'image_data': image_data2, 'positioning': 1}
-        a_height = s.height + RECT_SUB_PIX_PADDING
-        a_width = s.width + RECT_SUB_PIX_PADDING
-        if ADJUSTED_HEIGHT < a_height or ADJUSTED_WIDTH < a_width:
-            fact_h = (ADJUSTED_HEIGHT) / (a_height + 16)
-            fact_w = (ADJUSTED_WIDTH) / (a_width + 4)
-            image_arg1['x_scale'] = image_arg1['y_scale'] = image_arg2['x_scale'] = image_arg2['y_scale'] = min(fact_h, fact_w)
+        cv2.drawContours(slc, [s.contour], -1, (255, 0, 0), thickness=1, offset=offset)
+        image_arg1 = make_image_arg(s, slc)
         worksheet.insert_image(i, 7, str(i), image_arg1)
-        worksheet.insert_image(i, 8, str(i), image_arg2)
         fmt = xfmt if s.is_size else xfmt_megenta
         fmt = fmt if s.is_round else xfmt_red
         worksheet.set_row(i, MAX_HEIGHT, fmt)
@@ -195,17 +186,13 @@ def churn(roi, stats):
         worksheet.write_number(i, 4, s.height)
         worksheet.write_number(i, 5, s.area)
         worksheet.write_number(i, 6, s.perimeter)
-        # 6 - raw
         # 7 - Marked
-        worksheet.write_number(i, 9, s.count, xfmt_bold)
-        worksheet.write_number(i, 10, s.roundness)
-        worksheet.write_number(i, 11, s.roundness2)
-        worksheet.write_number(i, 12, s.regularity)
-        worksheet.write_number(i, 13, s.reduced_defects)
-        worksheet.write_boolean(i, 14, s.is_round)
-        worksheet.write_boolean(i, 15, s.is_size)
+        worksheet.write_number(i, 8, s.count, xfmt_bold)
+        worksheet.write_number(i, 9, s.reduced_defects)
+        worksheet.write_boolean(i, 10, s.is_round)
+        worksheet.write_boolean(i, 11, s.is_size)
 
-    worksheet.add_table(0, 0, len(stats)+1, 14, {
+    worksheet.add_table(0, 0, len(stats)+1, 11, {
         'total_row': True,
         'banded_rows': False,
         'style': 'Table Style Light 11',
@@ -217,12 +204,8 @@ def churn(roi, stats):
             {'header': 'height'},
             {'header': 'area'},
             {'header': 'perimeter'},
-            {'header': 'pic raw'},
             {'header': 'pic marked'},
             {'header': 'COUNT', 'total_function': 'sum'},
-            {'header': 'roundness'},
-            {'header': 'roundness2'},
-            {'header': 'regularity'},
             {'header': 'defects No.'},
             {'header': 'is round'},
             {'header': 'is sized'},
@@ -234,7 +217,6 @@ def churn(roi, stats):
     Helper.logText("draw red")
     cv2.drawContours(roi_marked, green2, -1, (0, 255, 0))
     Helper.logText("draw green")
-
     _, buf_mark = cv2.imencode('.jpg', roi_marked)
     image_data_mark = io.BytesIO(buf_mark)
     worksheet2 = workbook.add_worksheet()
@@ -249,7 +231,13 @@ def churn(roi, stats):
     worksheet3.set_zoom(50)
     Helper.logText("encoded raw")
 
-    workbook.close()
+    data = [s.__getstate__() for s in stats]
+    df = pandas.DataFrame(data)
+    # df.to_excel(writer, index=False, sheet_name='raw')
+    # writer.sheets['raw'].add_table(0, 0, len(stats) + 1, df.columns.size, {'banded_rows': False})
+    Helper.logText(u"added raw data")
+
+    writer.save()
     Helper.logText(u"saved excel")
 
     # markers_ws = mycv2.watershed(roi_color, markers)
@@ -257,6 +245,19 @@ def churn(roi, stats):
     # cols = cv2.watershed(roi_color, dt_trash)
 
     return roi_marked
+
+
+def make_image_arg(s, slc):
+    __, buf1 = cv2.imencode('.jpg', slc)
+    image_data1 = io.BytesIO(buf1)
+    image_arg1 = {'image_data': image_data1, 'positioning': 1}
+    a_height = s.height + RECT_SUB_PIX_PADDING
+    a_width = s.width + RECT_SUB_PIX_PADDING
+    if ADJUSTED_HEIGHT < a_height or ADJUSTED_WIDTH < a_width:
+        fact_h = (ADJUSTED_HEIGHT) / (a_height + 16)
+        fact_w = (ADJUSTED_WIDTH) / (a_width + 4)
+        image_arg1['x_scale'] = image_arg1['y_scale'] = min(fact_h, fact_w)
+    return image_arg1
 
 
 def process_file(filename):

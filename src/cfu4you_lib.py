@@ -8,7 +8,7 @@ import os
 import sys
 from logging import FileHandler
 from vlogging import VisualRecord as _VisualRecord
-#import scipy.ndimage as scind
+import inspect
 import logging
 import re
 from pydash import py_
@@ -251,7 +251,7 @@ def findROIs(img):
     filtered_circles = filter(lambda c: c[2] > (0.8 * best_c[2]), filtered_circles)
     Helper.logText("number rough ROIs {0:d}".format(len(filtered_circles)))
     circles_left2right = sorted(filtered_circles, key=lambda c: c[2], reverse=True)
-    ret = [{'c': (c[0], c[1]), 'r': c[2]} for c in circles_left2right]
+    ret = [{'c': (c[0], c[1]), 'r': c[2] + DILATOR_SIZE} for c in circles_left2right]
     return ret
 
 
@@ -349,9 +349,10 @@ class ContourStats(object):
 
 
     @classmethod
-    def find_contours(cls, img, predicate=None, mode=cv2.CHAIN_APPROX_NONE):
-        ret = cv2.findContours(img.copy(), cv2.RETR_CCOMP, mode)
+    def find_contours(cls, img, predicate=lambda x:x, mode=cv2.CHAIN_APPROX_NONE):
+        ret = cv2.findContours(img.copy(), cv2.RETR_TREE, mode)
         img_marked, contours, [hierarchy] = ret
+        Helper.log('find_contours ' + inspect.getsource(predicate), img_marked)
         stats = py_(contours)\
             .zip(hierarchy)\
             .map(cls.from_contour)\
