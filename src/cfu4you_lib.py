@@ -204,9 +204,12 @@ def blowup(img):
     h = clahe.apply(h)
     v = clahe.apply(v)
     s = clahe.apply(cv2.multiply(s, 2))
-    per = int(numpy.percentile(v, 99))
+    per = int(numpy.percentile(v, 90))
+    v90 = cv2.subtract(v, per)
+    blown_hsv = cv2.merge([h,s,v])
+    blown = cv2.cvtColor(blown_hsv, cv2.COLOR_HSV2BGR)
     _, threshold = cv2.threshold(v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return threshold
+    return threshold, blown
 
 
 # def deluminate(img, rad=70):
@@ -263,13 +266,14 @@ def cropROI(ROI, *imgs):
         mycv2.circle(neg, (ROI['r'], ROI['r']), ROI['r'], color, -1)
         cropped = mycv2.subtract(clip, neg)
         out.append(cropped)
+    # noinspection PyUnboundLocalVariable
     Helper.log_pics([info, clip, neg, cropped])
     return out
 
 
 class ContourStats(object):
-    def __init__(self, contour, M, cx, cy, offset, width, height, roundness, regularity,
-                 area, rect, perimeter, hull, defects):
+    def __init__(self, contour, M, cx, cy, offset, width, height, hierarchy, roundness,
+                 regularity, area, rect, perimeter, hull, defects, tag, is_internal, is_external):
         self.contour = contour
         self.M = M
         self.cx = cx
@@ -277,6 +281,7 @@ class ContourStats(object):
         self.offset = offset
         self.width = width
         self.height = height
+        self.hierarchy = hierarchy
         self.roundness2 = 4 * math.pi * area / (perimeter * perimeter)
         self.roundness = roundness
         self.regularity = regularity
@@ -285,6 +290,9 @@ class ContourStats(object):
         self.perimeter = perimeter
         self.hull = hull
         self.defects = defects
+        self.tag = tag
+        self.is_internal = is_internal
+        self.is_external = is_external
         m = map(lambda i: i[0][3] / 256.0, self.defects[1:]) if self.defects is not None else []
         self.reduced_defects = len(filter(lambda i: i > DEFECT_MIN_SIZE, m))
         self.is_size = 50 < self.area < 5000
@@ -303,7 +311,8 @@ class ContourStats(object):
         return state
 
     @classmethod
-    def from_contour(cls, cnt, *args):
+    def from_contour(cls, pair, tag, _=None):
+        cnt, hierarchy = pair
         if len(cnt) < 5:
             return None
         area = cv2.contourArea(cnt)
@@ -319,6 +328,7 @@ class ContourStats(object):
         M = cv2.moments(cnt)
         if M['m00'] == 0:
             return None
+
         cx = int(M['m10'] / M['m00'])
         cy = int(M['m01'] / M['m00'])
         x, y, w, h = cv2.boundingRect(cnt)
@@ -330,18 +340,20 @@ class ContourStats(object):
         roundness = abs(math.log(area_circularity, 1.1))
         rect_proportion = mw / mh
         regularity = abs(math.log(rect_proportion, 10))
-        ret = cls(cnt, M=M, cx=cx, cy=cy, offset=(-x, -y), width=w, height=h, roundness=roundness,
-                  regularity=regularity, area=area, rect=rect, perimeter=perimeter, hull=hull, defects=defects)
+        is_external = hierarchy[3] == -1
+        is_internal = hierarchy[2] == -1
+        ret = cls(cnt, M=M, cx=cx, cy=cy, offset=(-x, -y), width=w, height=h, hierarchy=hierarchy, roundness=roundness,
+                  regularity=regularity, area=area, rect=rect, perimeter=perimeter, hull=hull, defects=defects, tag=tag,
+                  is_internal=is_internal, is_external=is_external)
         return ret
 
 
     @classmethod
-    def find_contours(cls, img, predicate=None, inner=True):
-
-        ret = cv2.findContours(img.copy(), cv2.CHAIN_APPROX_SIMPLE, cv2.RETR_LIST)
+    def find_contours(cls, img, predicate=None, mode=cv2.CHAIN_APPROX_NONE):
+        ret = cv2.findContours(img.copy(), cv2.RETR_CCOMP, mode)
         img_marked, contours, [hierarchy] = ret
-        stats = py_(hierarchy)\
-            .map(lambda x, i: contours[i] if (hierarchy[i][3] == -1 or inner) else [])\
+        stats = py_(contours)\
+            .zip(hierarchy)\
             .map(cls.from_contour)\
             .compact()\
             .filter(predicate)\

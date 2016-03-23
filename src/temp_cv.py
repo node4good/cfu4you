@@ -19,82 +19,119 @@ RECT_SUB_PIX_PADDING = 20
 K1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 1))
 K_CIRC_3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 K_CIRC_5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+K_CIRC_7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+K_CIRC_9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+K_CIRC_11 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+K_CIRC_13 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+K_CIRC_15 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
 K_CIRC_25 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
 K_SQ_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
 K_CROSS_3 = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
 K_CROSS_5 = cv2.getStructuringElement(cv2.MORPH_CROSS, (5, 5))
 ADPT_BLOCK_SIZE = 51
+ALL_CNTS = -1
+
+
+
+def segment_transform(mask, pred=None):
+    stats = ContourStats.find_contours(mask, pred)
+    markers = numpy.zeros(mask.shape, dtype=numpy.uint8)
+    for i, s in enumerate(stats, 1):
+        cv2.drawContours(markers, [s.contour], -1, 255, thickness=cv2.FILLED, lineType=cv2.LINE_4)
+    Helper.log_pics([markers])
+    return markers
+
+
+
+def segment_transform2(mask, pred=None):
+    _, labels, stats, centroids = mycv2.connectedComponentsWithStats(mask, connectivity=4)
+    v = enumerate(stats)
+    v = filter(lambda x: pred(x[1][4]), v)
+    vi = map(lambda x: x[0], v)
+    out = numpy.zeros(mask.shape, dtype=numpy.uint8)
+    out.flat[numpy.in1d(labels, vi)] = 255
+    Helper.logText('connected count {0} valid {1}', len(stats), len(vi))
+    Helper.log_pics([out])
+    return out
+
+
+def segment3(color, markers):
+    markers = mycv2.watershed(color, markers)
+    mask = markers.copy()
+    mask[mask == -1] = 0
+    Helper.log_pics([mask])
+    _, labels, stats, centroids = mycv2.connectedComponentsWithStats(mask.astype(numpy.uint8), connectivity=4)
+    labels = labels.astype(numpy.uint16)
+    Helper.log_pics([labels + 20000])
+    good = []
+    for i in range(1, len(stats)):
+        s = stats[i]
+        area_circularity = (s[2] * s[3] * math.pi) / (s[4] * 4.0)
+        r = abs(math.log(area_circularity, 1.1))
+        if s[4] > 4000: continue
+        good.append(i)
+    out = []
+    for i in good:
+        label = numpy.zeros(labels.shape, dtype=numpy.uint8)
+        label[labels == i] = 255
+        ret = cv2.findContours(label, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+        img_marked, contours, [hierarchy] = ret
+        cnt = ContourStats.from_contour((contours[0], hierarchy[0]), i)
+        if cnt is None: continue
+        out.append(cnt)
+    Helper.logText('segment3 connected count {0}', len(out))
+    return labels, out
 
 
 def find_colonies1(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-    threshold = mycv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADPT_BLOCK_SIZE, 0).astype(numpy.uint8)
-    eroded = mycv2.erode(threshold, K_CROSS_3, iterations=3)
-    morhped = mycv2.morphologyEx(eroded, cv2.MORPH_OPEN, K_CROSS_5, iterations=2)
-    mrg = cv2.merge([threshold, eroded, morhped])[0:900, 0:900, :]
-    Helper.log("threshold, eroded, morhped", mrg)
-    sure_bg = mycv2.dilate(morhped, K_CIRC_5, iterations=3)
-    Helper.log_overlay(img, sure_bg)
-    sure_bg_inv = mycv2.bitwise_not(eroded)
-    Helper.log('sure_bg_inv', [sure_bg_inv])
-    bg_inv_dilated = mycv2.dilate(sure_bg_inv, K_CIRC_3, iterations=2)
-    Helper.log('bg_inv_dilated', [bg_inv_dilated])
-    dist_transform = mycv2.distanceTransform(morhped, cv2.DIST_L2, 5)
-    _, sure_fg = mycv2.threshold(dist_transform, 0.4 * dist_transform.max(), 255, 0)
-    sure_fg = sure_fg.astype(numpy.uint8)
-    Helper.log("sure_fg, bg_inv_dilated, eroded", cv2.merge([sure_fg, bg_inv_dilated, eroded]))
-    stats = ContourStats.find_contours(sure_fg, lambda r: (4 < r.area))
-    markers = numpy.zeros(gray.shape, dtype=numpy.int32)
-    color3 = img.copy()
-    for i, s in enumerate(stats, 1):
-        cv2.drawContours(markers, [s.contour], -1, i, thickness=cv2.FILLED, lineType=cv2.LINE_8)
-        i_ = 10 * (i % 16) + 90
-        cv2.drawContours(color3, [s.contour], -1, (0,0,i_), thickness=1, lineType=cv2.LINE_8)
-    bg_stats = ContourStats.find_contours(sure_bg_inv, lambda r: (500 < r.area))
-    for i, s in enumerate(bg_stats, i + 1):
-        cv2.drawContours(markers, [s.contour], -1, i, thickness=1, lineType=cv2.LINE_8)
-        i_ = 10 * (i % 16) + 90
-        cv2.drawContours(color3, [s.contour], -1, (0,i_,0), thickness=1, lineType=cv2.LINE_8)
-    Helper.log('markers', [markers])
-    Helper.log('color3 1', [color3])
+    threshold_f = mycv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADPT_BLOCK_SIZE, 0)
+    threshold = threshold_f.astype(numpy.uint8)
+    eroded = cv2.erode(threshold, K_CIRC_11)
+    dilated = cv2.dilate(eroded, K_CIRC_15)
+    Helper.log_overlay(img, dilated)
+    dist_transform = cv2.distanceTransform(threshold, cv2.DIST_L2, 5)
+    _, best_fg = cv2.threshold(dist_transform, 0.2 * dist_transform.max(), 255, 0)
+    best_fg = best_fg.astype(numpy.uint8)
+    Helper.log_overlay(img, best_fg)
+    mask = dilated
+    mask_c3 = cv2.merge([mask, mask, mask])
+    Helper.log_overlay(img, mask)
+    masked_img = cv2.bitwise_and(img, mask_c3)
+    masked_img_eq = equalizeMulti(masked_img)
 
-    mask_3c = mycv2.merge([sure_bg_inv, sure_bg_inv, sure_bg_inv])
-    masked = mycv2.subtract(img, mask_3c)
-    Helper.log('mask', [masked])
-    markers = mycv2.watershed(masked, markers)
-    contours2 = numpy.zeros(gray.shape, dtype=numpy.uint8)
-    contours2[markers == -1] = 255
-    contours3 = numpy.ones(gray.shape, dtype=numpy.uint8) * 255
-    contours3[markers == -1] = 0
-    Helper.log('contours3', [contours3])
-    retval, labels, stats, centroids = mycv2.connectedComponentsWithStats(contours3, connectivity=4)
-    labels2 = labels.copy()
-    v = enumerate(stats)
-    v = filter(lambda x: x[1][4] > 20000, v)
-    vi = map(lambda x: x[0], v)
-    labels2.flat[numpy.in1d(labels2, vi)] = 0
-    Helper.logText('connected count {0} valid {1}', len(stats), len(vi))
-    Helper.log('labels2', [labels2.astype(numpy.uint8)])
-    contours2_d = mycv2.dilate(contours2, K_CIRC_3, iterations=1)
-    labels2[contours2_d == 255] = 0
-    labels3 = labels2.astype(numpy.uint8)
-    labels3 = mycv2.erode(labels3, K_CIRC_3, iterations=4)
-    labels3 = mycv2.dilate(labels3, K_CIRC_3, iterations=4)
-    Helper.log('labels3', [labels3])
-    stats = ContourStats.find_contours(labels3, lambda r: (16 < r.area < 10000))
-    stats.sort(key=lambda r: r.area, reverse=1)
-    contours2 = numpy.zeros(img.shape, dtype=numpy.uint8)
+    best_fg_stats = ContourStats.find_contours(best_fg, lambda r: (4 < r.area))
+    markers = numpy.zeros(gray.shape, dtype=numpy.int32)
+    for i, s in enumerate(best_fg_stats, 2):
+        cv2.drawContours(markers, [s.contour], ALL_CNTS, i, thickness=cv2.FILLED, lineType=cv2.LINE_8)
+    masked_markers = mycv2.multiply(markers, mask/255, dtype=cv2.CV_32S)
+    Helper.log_overlay(img, masked_markers)
+    masked_markers[1,1] = 1 # add a marker for the BG
+
+    # labels, stats = segment3(masked_img, masked_markers)
+    markers_after_watershed = mycv2.watershed(masked_img_eq, masked_markers)
+    markers_bin = numpy.zeros(gray.shape, dtype=numpy.int32)
+    markers_bin[markers_after_watershed < 2] = 255
+    Helper.log('markers_after_watershed', markers_bin)
+    Helper.log_overlay(img, markers_bin)
+
+    stats = ContourStats.find_contours(markers_bin, lambda r: r.is_internal and r.is_external and 8 < r.area < 1e4)
+    stats.sort(key=lambda r: r.area, reverse=True)
+    outlines = numpy.zeros(img.shape, numpy.int8)
     for i, s in enumerate(stats):
-        i_ = 7 * ((i % 64)) + 63
-        cv2.drawContours(contours2, [s.contour], -1, (0,255,i_), thickness=2, lineType=cv2.LINE_8)
-        cv2.putText(contours2, str(i), (s.cx, s.cy), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,i_), thickness=2, lineType=cv2.LINE_8)
-    Helper.log('contours', [contours2])
+        i_ = choose_color(i)
+        cv2.drawContours(outlines, [s.contour], ALL_CNTS, (i_,-50,i_), thickness=1, lineType=cv2.LINE_8)
+    Helper.log('color3', [cv2.add(img, outlines, dtype=cv2.CV_8UC3)])
     return stats
 
 
+def choose_color(i):
+    return 10 * (i % 16) + 90
+
+
 def churn(roi, stats):
-    img_eq = equalizeMulti(roi)
+    img_eq = roi
     roi_marked = img_eq.copy()
 
     workbook = xlsxwriter.Workbook(Helper.OUTPUT_PREFIX + '.xlsx')
@@ -223,6 +260,7 @@ def churn(roi, stats):
 
 
 def process_file(filename):
+    # noinspection PyUnresolvedReferences
     ts = "{:%Y-%m-%d-%H-%M-%S}".format(datetime.now())
     Helper.logText("*************** {0:s} - {1} ***************".format(filename, ts))
     file_path = os.path.join(DIR_NAME, filename)
@@ -232,19 +270,19 @@ def process_file(filename):
     if orig.shape[0] < orig.shape[1]:
         orig = numpy.rot90(orig, 3)
         Helper.logText("rotated")
-    masked = blowup(orig)
+    masked, blown = blowup(orig)
     Helper.log_pics([masked])
+    Helper.log_pics([blown])
     rois = findROIs(masked)
     roi = rois[0]
-    [roi_color] = cropROI(roi, orig)
+    [roi_color] = cropROI(roi, blown)
     Helper.log_pics([roi_color])
     st = find_colonies1(roi_color)
     # data = [s.__getstate__() for s in st]
     # df = pandas.DataFrame(data)
     # df.to_csv(filename + '.csv')
-    # colonies1_merged = churn(roi_color, st)
-    # Helper.log(file_path, colonies1_merged)
-
+    colonies1_merged = churn(roi_color, st)
+    Helper.log(file_path, colonies1_merged)
 
 
 
@@ -277,11 +315,13 @@ def process_file(filename):
 # DIR_NAME = r"V:\CFU\5"
 # files = ["IMG_20151125_183850.png"]
 #
-DIR_NAME = r"V:\CFU\RB\images_for_Refael"
+DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
+# DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # files = os.listdir(DIR_NAME)
 # random.shuffle(files)
 # files = ['E072_g7.JPG'] # HARD
 files = ['E072_d7.JPG'] # EASY
+# files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
 OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 
