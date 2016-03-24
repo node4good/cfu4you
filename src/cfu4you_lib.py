@@ -275,7 +275,7 @@ def cropROI(ROI, *imgs):
 
 
 class ContourStats(object):
-    def __init__(self, contour, M, cx, cy, offset, width, height, hierarchy, roundness,
+    def __init__(self, contour, M, cx, cy, offset, width, height, hierarchy, radius, roundness,
                  regularity, area, rect, perimeter, hull, defects, tag, is_internal, is_external):
         """
 
@@ -295,6 +295,8 @@ class ContourStats(object):
         @type height: int
         @param hierarchy:
         @type hierarchy: numpy.ndarray
+        @param radius:
+        @type radius: float
         @param roundness:
         @type roundness: float
         @param regularity:
@@ -324,6 +326,7 @@ class ContourStats(object):
         self.width = width
         self.height = height
         self.hierarchy = hierarchy
+        self.radius = radius
         self.roundness2 = 4 * math.pi * area / (perimeter * perimeter)
         self.roundness = roundness
         self.regularity = regularity
@@ -363,6 +366,7 @@ class ContourStats(object):
         rect = cv2.fitEllipse(cnt)
         mw = rect[1][0]
         mh = rect[1][1]
+        r = min(mw, mh) / 2
         rect_size = mw * mh
         if rect_size <= 0:
             return None
@@ -384,9 +388,9 @@ class ContourStats(object):
         regularity = abs(math.log(rect_proportion, 10))
         is_external = hierarchy[3] == -1
         is_internal = hierarchy[2] == -1
-        ret = cls(cnt, M=M, cx=cx, cy=cy, offset=(-x, -y), width=w, height=h, hierarchy=hierarchy, roundness=roundness,
-                  regularity=regularity, area=area, rect=rect, perimeter=perimeter, hull=hull, defects=defects, tag=tag,
-                  is_internal=is_internal, is_external=is_external)
+        ret = cls(cnt, M=M, cx=cx, cy=cy, offset=(-x, -y), width=w, height=h, hierarchy=hierarchy, radius=r,
+                  roundness=roundness, regularity=regularity, area=area, rect=rect, perimeter=perimeter, hull=hull,
+                  defects=defects, tag=tag, is_internal=is_internal, is_external=is_external)
         return ret
 
 
@@ -394,7 +398,6 @@ class ContourStats(object):
     def find_contours(cls, img, predicate=lambda x:x, mode=cv2.CHAIN_APPROX_NONE):
         ret = cv2.findContours(img.copy(), cv2.RETR_TREE, mode)
         img_marked, contours, [hierarchy] = ret
-        Helper.log('find_contours ' + inspect.getsource(predicate), img_marked)
         stats = py_(contours)\
             .zip(hierarchy)\
             .map(cls.from_contour)\
