@@ -11,24 +11,12 @@ from vlogging import VisualRecord as _VisualRecord
 import inspect
 import logging
 import re
+from string import Template
 from pydash import py_
 
 
 DILATOR_SIZE = 100
-MAX_HEIGHT = 40.0
-MAX_WIDTH = 10.0
-ADJUSTED_HEIGHT = (MAX_HEIGHT - 1) * 1.4 - 2.0
-ADJUSTED_WIDTH = (MAX_WIDTH - 1) * 8.0 - 2.0
 DEFECT_MIN_SIZE = 2
-RECT_SUB_PIX_PADDING = 20
-K1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (1, 1))
-K_CIRC_3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-K_CIRC_5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-K_CIRC_25 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (25, 25))
-K_SQ_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-K_CROSS_3 = cv2.getStructuringElement(cv2.MORPH_CROSS, (3, 3))
-K_CROSS_5 = cv2.getStructuringElement(cv2.MORPH_CROSS, (5, 5))
-ADPT_BLOCK_SIZE = 51
 
 
 class VisualRecord(_VisualRecord):
@@ -54,6 +42,20 @@ class VisualRecord(_VisualRecord):
         _VisualRecord.__init__(self, title, imgs, footnotes, fmt)
 
 
+    def __str__(self):
+        t = Template("""
+<h4>$title</h4>
+<span style="white-space: nowrap">$imgs</span>
+$footnotes
+<hr/>""")
+
+        return t.substitute({
+            "title": self.title,
+            "imgs": self.render_images(),
+            "footnotes": self.render_footnotes()
+        })
+
+
 class Helper(object):
     OUTPUT_PREFIX = ''
     time_stamp = format(int((time.time() * 10) % 10000000), "6d")
@@ -61,6 +63,7 @@ class Helper(object):
     htmlfile = 'cfu4you' + time_stamp + '.html'
     fh = FileHandler(htmlfile, mode="w")
     fh._old_close = fh.close
+    fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style>\n')
 
     def on_log_close(h=htmlfile, fh=fh):
         if 'last_type' in sys.__dict__:
@@ -103,7 +106,7 @@ class Helper(object):
         formatted_lines = traceback.format_stack()
         good_lines = filter(lambda s: 'in log' not in s, formatted_lines)
         line_no = good_lines[-1].split(',')[1][1:]
-        d_msg = "[{0:4.0f}]ms - {1:<8} - {2:<60}<br>".format(d * 1000, line_no, msg.format(*args))
+        d_msg = "[{0:4.0f}]ms - {1:<8} - {2}".format(d * 1000, line_no, msg.format(*args))
         return d_msg
 
     @classmethod
@@ -201,7 +204,7 @@ def blowup(img):
     img = mycv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     h,s,v = mycv2.split(img)
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(10, 10))
-    h = clahe.apply(h)
+    h = h#clahe.apply(h)
     v = clahe.apply(v)
     s = clahe.apply(cv2.multiply(s, 2))
     per = int(numpy.percentile(v, 90))
@@ -274,6 +277,45 @@ def cropROI(ROI, *imgs):
 class ContourStats(object):
     def __init__(self, contour, M, cx, cy, offset, width, height, hierarchy, roundness,
                  regularity, area, rect, perimeter, hull, defects, tag, is_internal, is_external):
+        """
+
+        @param contour:
+        @type contour: numpy.ndarray
+        @param M:
+        @type M: Dict[str, float]
+        @param cx:
+        @type cx: int
+        @param cy:
+        @type cy: int
+        @param offset:
+        @type offset: Tuple[int, int]
+        @param width:
+        @type width: int
+        @param height:
+        @type height: int
+        @param hierarchy:
+        @type hierarchy: numpy.ndarray
+        @param roundness:
+        @type roundness: float
+        @param regularity:
+        @type regularity: float
+        @param area:
+        @type area: float
+        @param rect:
+        @type rect: Tuple[Tuple[float, float], Tuple[float, float], float]
+        @param perimeter:
+        @type perimeter: float
+        @param hull:
+        @type hull: numpy.ndarray
+        @param defects:
+        @type defects: numpy.ndarray
+        @param tag:
+        @type tag: int
+        @param is_internal:
+        @type is_internal: numpy.bool_
+        @param is_external:
+        @type is_external: numpy.bool_
+        """
         self.contour = contour
         self.M = M
         self.cx = cx

@@ -9,7 +9,6 @@ import numpy
 import os
 import pandas
 
-DILATOR_SIZE = 100
 MAX_HEIGHT = 40.0
 MAX_WIDTH = 10.0
 ADJUSTED_HEIGHT = (MAX_HEIGHT - 1) * 1.4 - 2.0
@@ -106,38 +105,48 @@ def find_colonies1(img):
     for i, s in enumerate(best_fg_stats, 2):
         cv2.drawContours(markers, [s.contour], ALL_CNTS, i, thickness=cv2.FILLED, lineType=cv2.LINE_8)
     masked_markers = mycv2.multiply(markers, mask/255, dtype=cv2.CV_32S)
+    masked_markers[gray == 0] = 1
+    # r = img.shape[0] / 2
+    # mycv2.circle(masked_markers, (r, r), r, 1)
     Helper.log_overlay(img, masked_markers)
-    masked_markers[1,1] = 1 # add a marker for the BG
 
     # labels, stats = segment3(masked_img, masked_markers)
     markers_after_watershed = mycv2.watershed(masked_img_eq, masked_markers)
     Helper.log_pics([markers_after_watershed])
     markers_bin = numpy.zeros(gray.shape, dtype=numpy.uint8)
-    markers_bin[markers_after_watershed < 2] = 255
+    markers_bin[markers_after_watershed >= 2] = 255
     Helper.log_overlay(img, markers_bin)
     markers_bin2 = cv2.morphologyEx(markers_bin, cv2.MORPH_OPEN, K_CIRC_11)
     Helper.log_overlay(img, markers_bin2)
     Helper.log('markers diff', [cv2.absdiff(markers_bin, markers_bin2)])
 
-    stats = ContourStats.find_contours(markers_bin2, lambda r: 8 < r.area < 3000)
+    stats = ContourStats.find_contours(markers_bin2, lambda r: 16 < r.area < 3000)
     stats.sort(key=lambda r: r.area, reverse=True)
     outlines = numpy.zeros(img.shape, numpy.int8)
     for i, s in enumerate(stats):
         i_ = choose_color(i)
-        cv2.drawContours(outlines, [s.contour], ALL_CNTS, (i_,-50,i_), thickness=1, lineType=cv2.LINE_8)
+        cv2.drawContours(outlines, [s.contour], ALL_CNTS, (i_, -i_, 255), thickness=1, lineType=cv2.LINE_8)
     Helper.log('color3', [cv2.add(img, outlines, dtype=cv2.CV_8UC3)])
     return stats
 
 
 def choose_color(i):
-    return 10 * (i % 16) + 90
+    return 20 * (i % 8) + 90
 
 
 def churn(roi, stats):
+    """
+
+    :param roi:
+    :type roi:
+    :param stats:
+    :type stats: List[ContourStats]
+    :return:
+    :rtype:
+    """
     img_eq = roi
     roi_marked = img_eq.copy()
 
-    # By setting the 'engine' in the ExcelWriter constructor.
     writer = pandas.ExcelWriter(Helper.OUTPUT_PREFIX + '.xlsx', engine='xlsxwriter')
     workbook = writer.book
     workbook.default_format_properties['valign'] = 'top'
@@ -146,8 +155,8 @@ def churn(roi, stats):
     xfmt = workbook.add_format()
     xfmt_red = workbook.add_format()
     xfmt_red.set_font_color('red')
-    xfmt_megenta = workbook.add_format()
-    xfmt_megenta.set_font_color('magenta')
+    xfmt_magenta = workbook.add_format()
+    xfmt_magenta.set_font_color('magenta')
     xfmt_bold = workbook.add_format()
     xfmt_bold.set_font_color('green')
     xfmt_bold.set_bold(True)
@@ -155,11 +164,10 @@ def churn(roi, stats):
     Helper.logText("prepare excel")
 
     cp = roi.copy()
-    cv2.drawContours(cp, map(lambda s:s.contour, stats), -1, (255, 0, 0), thickness=1, lineType=cv2.LINE_8)
+    cv2.drawContours(cp, map(lambda s: s.contour, stats), -1, (255, 0, 0), thickness=1, lineType=cv2.LINE_8)
 
     red2 = []
     green2 = []
-    """s:type : CntStats"""
     for i, s in enumerate(stats, 1):
         if s.count:
             green2.append(s.contour)
@@ -176,7 +184,7 @@ def churn(roi, stats):
         cv2.drawContours(slc, [s.contour], -1, (255, 0, 0), thickness=1, offset=offset)
         image_arg1 = make_image_arg(s, slc)
         worksheet.insert_image(i, 7, str(i), image_arg1)
-        fmt = xfmt if s.is_size else xfmt_megenta
+        fmt = xfmt if s.is_size else xfmt_magenta
         fmt = fmt if s.is_round else xfmt_red
         worksheet.set_row(i, MAX_HEIGHT, fmt)
         worksheet.write_number(i, 0, i)
@@ -189,7 +197,7 @@ def churn(roi, stats):
         # 7 - Marked
         worksheet.write_number(i, 8, s.count, xfmt_bold)
         worksheet.write_number(i, 9, s.reduced_defects)
-        worksheet.write_boolean(i, 10, s.is_round)
+        worksheet.write_number(i, 10, s.roundness)
         worksheet.write_boolean(i, 11, s.is_size)
 
     worksheet.add_table(0, 0, len(stats)+1, 11, {
@@ -207,7 +215,7 @@ def churn(roi, stats):
             {'header': 'pic marked'},
             {'header': 'COUNT', 'total_function': 'sum'},
             {'header': 'defects No.'},
-            {'header': 'is round'},
+            {'header': 'roundness'},
             {'header': 'is sized'},
         ]
     })
@@ -233,8 +241,8 @@ def churn(roi, stats):
 
     data = [s.__getstate__() for s in stats]
     df = pandas.DataFrame(data)
-    # df.to_excel(writer, index=False, sheet_name='raw')
-    # writer.sheets['raw'].add_table(0, 0, len(stats) + 1, df.columns.size, {'banded_rows': False})
+    df.to_excel(writer, index=False, sheet_name='raw')
+    writer.sheets['raw'].add_table(0, 0, len(stats) + 1, df.columns.size, {'banded_rows': False})
     Helper.logText(u"added raw data")
 
     writer.save()
@@ -279,6 +287,7 @@ def process_file(filename):
     [roi_color] = cropROI(roi, blown)
     Helper.log_pics([roi_color])
     st = find_colonies1(roi_color)
+    if len(st) == 0: return
     # data = [s.__getstate__() for s in st]
     # df = pandas.DataFrame(data)
     # df.to_csv(filename + '.csv')
@@ -320,8 +329,8 @@ DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # files = os.listdir(DIR_NAME)
 # random.shuffle(files)
-# files = ['E072_g7.JPG'] # HARD
 files = ['E072_d7.JPG'] # EASY
+# files = ['E072_g7.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
 OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
