@@ -121,13 +121,23 @@ class Helper(object):
         cls.fh.flush()
 
     @classmethod
-    def log_pics(cls, imgs, *args):
+    def log_pics(cls, imgs, save=False, *args):
         formatted_lines = traceback.format_stack()
         var_names = re.split('\[|\]', formatted_lines[-2])[1]
         names = re.split(', ?', var_names)
-        for n, im in zip(names, imgs):
-            cv2.imwrite(cls.OUTPUT_PREFIX + '_' + n + '.jpg', im)
+        if save:
+            for n, im in zip(names, imgs):
+                cv2.imwrite(cls.OUTPUT_PREFIX + '_' + n + '.jpg', im)
         cls.log(var_names, imgs, *args)
+
+    @classmethod
+    def log_pic(cls, img, save=False, *args):
+        formatted_lines = traceback.format_stack()
+        var_names = re.split('\(|\)', formatted_lines[-2])[1]
+        name = re.split(', ?', var_names)[0]
+        if save:
+            cv2.imwrite(cls.OUTPUT_PREFIX + '_' + name + '.jpg', img)
+        cls.log(var_names, [img], *args)
 
     @classmethod
     def log_overlay(cls, img, mask, *args):

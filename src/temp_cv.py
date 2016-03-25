@@ -15,63 +15,29 @@ ADJUSTED_HEIGHT = (MAX_HEIGHT - 1) * 1.4 - 2.0
 ADJUSTED_WIDTH = (MAX_WIDTH - 1) * 8.0 - 2.0
 DEFECT_MIN_SIZE = 2
 RECT_SUB_PIX_PADDING = 20
-K_CIRCLE_5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+K_RECT_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+K_CIRCLE_7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
 ADAPTIVE_BLOCK_SIZE = 51
 ALL_CONTOURS = -1
 
-
-
-def segment_transform(mask, pred=None):
-    stats = ContourStats.find_contours(mask, pred)
-    markers = numpy.zeros(mask.shape, dtype=numpy.uint8)
-    for i, s in enumerate(stats, 1):
-        cv2.drawContours(markers, [s.contour], -1, 255, thickness=cv2.FILLED, lineType=cv2.LINE_4)
-    return markers
-
-
-def segment3(color, markers):
-    markers = mycv2.watershed(color, markers)
-    mask = markers.copy()
-    mask[mask == -1] = 0
-    Helper.log_pics([mask])
-    _, labels, stats, centroids = mycv2.connectedComponentsWithStats(mask.astype(numpy.uint8), connectivity=4)
-    labels = labels.astype(numpy.uint16)
-    Helper.log_pics([labels + 20000])
-    good = []
-    for i in range(1, len(stats)):
-        s = stats[i]
-        area_circularity = (s[2] * s[3] * math.pi) / (s[4] * 4.0)
-        r = abs(math.log(area_circularity, 1.1))
-        if s[4] > 4000: continue
-        good.append(i)
-    out = []
-    for i in good:
-        label = numpy.zeros(labels.shape, dtype=numpy.uint8)
-        label[labels == i] = 255
-        ret = cv2.findContours(label, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
-        img_marked, contours, [hierarchy] = ret
-        cnt = ContourStats.from_contour((contours[0], hierarchy[0]), i)
-        if cnt is None: continue
-        out.append(cnt)
-    Helper.logText('segment3 connected count {0}', len(out))
-    return labels, out
 
 
 def find_colonies1(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
     threshold_f = mycv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, 0)
-    threshold = threshold_f.astype(numpy.uint8)
+    threshold_p = threshold_f.astype(numpy.uint8)
+    threshold = cv2.erode(threshold_p, K_RECT_3)
     Helper.log_overlay(img, threshold)
-    r1, K1 = get_normal_kernel(threshold, 4)
+    r1, K1 = get_normal_kernel(img, threshold, 0.2)
+
     morphed = mycv2.morphologyEx(threshold, cv2.MORPH_OPEN, K1)
     Helper.log_overlay(img, morphed)
-
-    bg_mask = mycv2.dilate(morphed, K_CIRCLE_5)
+    bg_mask = mycv2.dilate(morphed, K_CIRCLE_7)
     Helper.log_overlay(img, bg_mask)
     masked_img = cv2.bitwise_and(img, cv2.merge([bg_mask, bg_mask, bg_mask]))
     masked_img_eq = equalizeMulti(masked_img)
-    Helper.log_pics([masked_img_eq])
+    Helper.log_pic(masked_img_eq)
 
     dist_transform = mycv2.distanceTransform(threshold, cv2.DIST_L2, cv2.DIST_MASK_5)
     _, best_fg = mycv2.threshold(dist_transform, r1, 255, cv2.THRESH_BINARY)
@@ -85,13 +51,21 @@ def find_colonies1(img):
     masked_markers = mycv2.multiply(markers, bg_mask/255, dtype=cv2.CV_32S)
     masked_markers[gray == 0] = 1
     Helper.log_overlay(img, masked_markers)
-
     markers_after_watershed = mycv2.watershed(masked_img_eq, masked_markers)
     Helper.log_pics([markers_after_watershed])
+    markers1 = numpy.add(markers_after_watershed, 1).astype(numpy.uint16)
+    histogram = numpy.bincount(markers1.flat)
+    bad_labels_bool = enumerate(histogram > 10000)
+    bad_labels_pair = filter(lambda x: x[1], bad_labels_bool)
+    bad_labels = map(lambda x: x[0], bad_labels_pair)
+    Helper.logText('bad_labels {0}', repr(bad_labels))
+    markers_culled = markers_after_watershed.copy()
+    markers_culled.flat[numpy.in1d(markers1, bad_labels)] = 0
+    Helper.log_pics([markers_culled])
     markers_bin = numpy.zeros(gray.shape, dtype=numpy.uint8)
-    markers_bin[markers_after_watershed >= 2] = 255
+    markers_bin[markers_culled > 2] = 255
     Helper.log_overlay(img, markers_bin)
-    r, K2 = get_normal_kernel(markers_bin)
+    r, K2 = get_normal_kernel(img, markers_bin)
     markers_bin2 = cv2.morphologyEx(markers_bin, cv2.MORPH_OPEN, K2)
     Helper.log_overlay(img, markers_bin2)
     Helper.log('markers diff', [cv2.absdiff(markers_bin, markers_bin2)])
@@ -106,13 +80,17 @@ def find_colonies1(img):
     return stats
 
 
-def get_normal_kernel(img, z=3):
-    stat = ContourStats.find_contours(img, lambda r: (2 ** 4 < r.area < 2 ** 12 and r.roundness < 0.1))
-    rads = map(lambda s: s.radius, stat)
+def get_normal_kernel(img, mask, b=1/3.0):
+    stats = ContourStats.find_contours(mask, lambda r: (2 ** 3 < r.area < 2 ** 12 and r.roundness < 0.2))
+    markers = numpy.zeros(mask.shape, dtype=numpy.uint8)
+    for i, s in enumerate(stats, 1):
+        cv2.drawContours(markers, [s.contour], -1, 255, thickness=cv2.FILLED, lineType=cv2.LINE_4)
+    Helper.log_overlay(img, markers)
+    rads = map(lambda s: s.radius, stats)
     avg = numpy.average(rads)
     std = numpy.std(rads)
-    lim = avg - z * std
-    Helper.logText('radius limit: avg - 3sigma {0}', lim)
+    lim = avg * b
+    Helper.logText('radius limit: sigma({2:.2f}), avg({0:.2f}) * {1}  = {3}', avg, b, std, lim)
     k_size = int(lim) * 2 + 1
     K = mycv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
     return lim, K
@@ -317,8 +295,8 @@ DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # files = os.listdir(DIR_NAME)
 # random.shuffle(files)
-files = ['E072_d7.JPG'] # EASY
-# files = ['E072_g7.JPG'] # HARD
+# files = ['E072_d7.JPG'] # EASY
+files = ['E072_g7.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
 OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
