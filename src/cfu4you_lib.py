@@ -245,38 +245,50 @@ def blowup(img):
 
 
 
+def is_80percent_in(shape):
+    return lambda c: c[0] + c[2] < shape[1] + (c[2] / 5) and c[1] + c[2] < shape[0] + (c[2] / 5)
+
+
 def findROIs(img):
     min_r = min(img.shape[:2]) / 4
-    circles = mycv2.HoughCircles(img, mycv2.HOUGH_GRADIENT, 64, 2 * min_r,
+    ret = mycv2.HoughCircles(img, mycv2.HOUGH_GRADIENT, 64, 2 * min_r,
                                  param1=255, param2=4 * min_r,
                                  minRadius=min_r, maxRadius=3 * min_r)
-    if circles is None:
+    if ret is None:
         Helper.logText("no ROIs")
         return None
-    Helper.logText("initial number of ROIs - {0:d}".format(len(circles)))
-    filtered_circles = circles[0].astype(numpy.int16)
-    r025 = filtered_circles[0][2] / 2
-    filtered_circles = filter(lambda c: c[0] > r025 and c[1] > r025, filtered_circles)
-    Helper.logText("number ROIs at least 1/2 r - {0:d}".format(len(filtered_circles)))
-    filtered_circles = filter(lambda c: c[0] + c[2] < img.shape[1] + (c[2] / 5) and c[1] + c[2] < img.shape[0] + (c[2] / 5), filtered_circles)
-    Helper.logText("number ROIs at least 80%% in - {0:d}".format(len(filtered_circles)))
-    best_c = filtered_circles[0]
-    filtered_circles = filter(lambda c: c[2] > (0.8 * best_c[2]), filtered_circles)
-    Helper.logText("number rough ROIs {0:d}".format(len(filtered_circles)))
-    circles_left2right = sorted(filtered_circles, key=lambda c: c[2], reverse=True)
+    Helper.logText("initial number of ROIs - {0:d}".format(len(ret)))
+    circles = ret[0].astype(numpy.int16)
+    r50 = circles[0][2] / 2
+    circles = filter(lambda c: c[0] > r50 and c[1] > r50, circles)
+    Helper.logText("number ROIs at least 1/2 r - {0:d}".format(len(circles)))
+    circles = filter(is_80percent_in(img.shape), circles)
+    Helper.logText("number ROIs at least 80%% in - {0:d}".format(len(circles)))
+    best_c = circles[0]
+    circles = filter(lambda c: c[2] > (0.8 * best_c[2]), circles)
+    Helper.logText("number rough ROIs {0:d}".format(len(circles)))
+    circles_left2right = sorted(circles, key=lambda c: c[2], reverse=True)
     ret = [{'c': (c[0], c[1]), 'r': c[2] + DILATOR_SIZE} for c in circles_left2right]
     return ret
 
 
+ROI_PAD = 2
 def cropROI(ROI, *imgs):
     out = []
     for img in imgs:
         info = img.copy()
-        mycv2.circle(info, ROI['c'], ROI['r'], (0, 255, 0), thickness=4)
-        clip = mycv2.getRectSubPix(img, (2 * ROI['r'], 2 * ROI['r']), ROI['c'])
-        color = 1 if len(img.shape) < 3 else (1, 1, 1)
+        roi_c = ROI['c']
+        roi_r = ROI['r']
+        mycv2.circle(info, roi_c, roi_r, (0, 255, 0), thickness=4)
+        border_color = 0 if len(img.shape) < 3 else (0, 0, 0)
+        img_b = cv2.copyMakeBorder(img, 100, 100, 100, 100, cv2.BORDER_CONSTANT, value=border_color)
+        cent = (roi_c[0] + 100, roi_c[1] + 100)
+        rect = (2 * (roi_r + ROI_PAD), 2 * (roi_r + ROI_PAD))
+        clip = mycv2.getRectSubPix(img_b, rect, cent)
         neg = clip.copy()
-        mycv2.circle(neg, (ROI['r'], ROI['r']), ROI['r'], color, -1)
+        mask_color = 1 if len(img.shape) < 3 else (1, 1, 1)
+        roi_rect = (roi_r + ROI_PAD, roi_r + ROI_PAD)
+        mycv2.circle(neg, roi_rect, roi_r, mask_color, -1)
         cropped = mycv2.subtract(clip, neg)
         out.append(cropped)
     # noinspection PyUnboundLocalVariable

@@ -24,7 +24,6 @@ ALL_CONTOURS = -1
 
 def find_colonies1(img):
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-
     threshold_f = mycv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, 0)
     threshold_p = threshold_f.astype(numpy.uint8)
     threshold = cv2.erode(threshold_p, K_RECT_3)
@@ -35,8 +34,9 @@ def find_colonies1(img):
     Helper.log_overlay(img, morphed)
     bg_mask = mycv2.dilate(morphed, K_CIRCLE_7)
     Helper.log_overlay(img, bg_mask)
-    masked_img = cv2.bitwise_and(img, cv2.merge([bg_mask, bg_mask, bg_mask]))
-    masked_img_eq = equalizeMulti(masked_img)
+    bg_maskC3 = cv2.merge([bg_mask, bg_mask, bg_mask])
+    masked_img = cv2.bitwise_and(img, bg_maskC3)
+    masked_img_eq = equalizeMulti(img)
     Helper.log_pic(masked_img_eq)
 
     dist_transform = mycv2.distanceTransform(threshold, cv2.DIST_L2, cv2.DIST_MASK_5)
@@ -53,14 +53,7 @@ def find_colonies1(img):
     Helper.log_overlay(img, masked_markers)
     markers_after_watershed = mycv2.watershed(masked_img_eq, masked_markers)
     Helper.log_pics([markers_after_watershed])
-    markers1 = numpy.add(markers_after_watershed, 1).astype(numpy.uint16)
-    histogram = numpy.bincount(markers1.flat)
-    bad_labels_bool = enumerate(histogram > 10000)
-    bad_labels_pair = filter(lambda x: x[1], bad_labels_bool)
-    bad_labels = map(lambda x: x[0], bad_labels_pair)
-    Helper.logText('bad_labels {0}', repr(bad_labels))
-    markers_culled = markers_after_watershed.copy()
-    markers_culled.flat[numpy.in1d(markers1, bad_labels)] = 0
+    markers_culled = delete_bad_labels(markers_after_watershed)
     Helper.log_pics([markers_culled])
     markers_bin = numpy.zeros(gray.shape, dtype=numpy.uint8)
     markers_bin[markers_culled > 2] = 255
@@ -74,10 +67,22 @@ def find_colonies1(img):
     stats.sort(key=lambda r: r.area, reverse=True)
     outlines = numpy.zeros(img.shape, numpy.int8)
     for i, s in enumerate(stats):
-        i_ = choose_color(i)
+        i_ = 20 * (i % 8) + 90
         cv2.drawContours(outlines, [s.contour], ALL_CONTOURS, (i_, -i_, 255), thickness=1, lineType=cv2.LINE_8)
     Helper.log('color3', [cv2.add(img, outlines, dtype=cv2.CV_8UC3)])
     return stats
+
+
+def delete_bad_labels(markers_after_watershed):
+    markers1 = numpy.add(markers_after_watershed, 1).astype(numpy.uint16)
+    histogram = numpy.bincount(markers1.flat)
+    bad_labels_bool = enumerate(histogram > 10000)
+    bad_labels_pair = filter(lambda x: x[1], bad_labels_bool)
+    bad_labels = map(lambda x: x[0], bad_labels_pair)
+    Helper.logText('bad_labels {0}', repr(bad_labels))
+    markers_culled = markers_after_watershed.copy()
+    markers_culled.flat[numpy.in1d(markers1, bad_labels)] = 0
+    return markers_culled
 
 
 def get_normal_kernel(img, mask, b=1/3.0):
@@ -90,14 +95,10 @@ def get_normal_kernel(img, mask, b=1/3.0):
     avg = numpy.average(rads)
     std = numpy.std(rads)
     lim = avg * b
-    Helper.logText('radius limit: sigma({2:.2f}), avg({0:.2f}) * {1}  = {3}', avg, b, std, lim)
+    Helper.logText('radius limit: sigma({2:.2f}), avg({0:.2f}) * {1:.2f}  = {3}', avg, b, std, lim)
     k_size = int(lim) * 2 + 1
     K = mycv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
     return lim, K
-
-
-def choose_color(i):
-    return 20 * (i % 8) + 90
 
 
 def churn(roi, stats):
@@ -251,6 +252,7 @@ def process_file(filename):
     rois = findROIs(masked)
     roi = rois[0]
     [roi_color] = cropROI(roi, blown)
+    # roi_color = blown
     Helper.log_pics([roi_color])
     st = find_colonies1(roi_color)
     if len(st) == 0: return
@@ -291,15 +293,18 @@ def process_file(filename):
 # DIR_NAME = r"V:\CFU\5"
 # files = ["IMG_20151125_183850.png"]
 #
-DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
+# DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
+# DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
+DIR_NAME = r"C:\code\6broad\.data\CFU\CFU(2)"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
-# files = os.listdir(DIR_NAME)
+files = os.listdir(DIR_NAME)[1:2]
 # random.shuffle(files)
+# files = ['2016-03-28 17.51.21.jpg'] # EASY
 # files = ['E072_d7.JPG'] # EASY
-files = ['E072_g7.JPG'] # HARD
+# files = ['E072_g7.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
-OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
+OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\ZBA"
 
 
 for f1 in files:
