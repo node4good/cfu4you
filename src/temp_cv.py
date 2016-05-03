@@ -1,24 +1,9 @@
 from cfu4you_lib import *
-
 from datetime import datetime
-import xlsxwriter
 import math
-import io
-import cv2
-import numpy
+from io import BytesIO as StringIO
 import os
-import pandas
 
-MAX_HEIGHT = 40.0
-MAX_WIDTH = 10.0
-ADJUSTED_HEIGHT = (MAX_HEIGHT - 1) * 1.4 - 2.0
-ADJUSTED_WIDTH = (MAX_WIDTH - 1) * 8.0 - 2.0
-DEFECT_MIN_SIZE = 2
-RECT_SUB_PIX_PADDING = 20
-K_RECT_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
-K_CIRCLE_7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-ADAPTIVE_BLOCK_SIZE = 51
-ALL_CONTOURS = -1
 
 
 
@@ -28,48 +13,65 @@ def find_colonies1(img):
     threshold_p = threshold_f.astype(numpy.uint8)
     threshold = cv2.erode(threshold_p, K_RECT_3)
     Helper.log_overlay(img, threshold)
-    r1, K1 = get_normal_kernel(img, threshold, 0.2)
-
+    r1, K1, bp1 = get_sample_parameters(img, threshold, 0.2)
+    _, bp_t = cv2.threshold(bp1, bp1[0,0], 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    bp_tm = cv2.morphologyEx(bp_t, cv2.MORPH_CLOSE, K1)
+    bp_tm2 = cv2.morphologyEx(bp_tm, cv2.MORPH_OPEN, K1)
+    Helper.log_pics([bp1, bp_t, bp_tm, bp_tm2])
     morphed = mycv2.morphologyEx(threshold, cv2.MORPH_OPEN, K1)
-    Helper.log_overlay(img, morphed)
-    bg_mask = mycv2.dilate(morphed, K_CIRCLE_7)
+    bg_mask_inv = mycv2.dilate(morphed, K_CIRCLE_21)
+    bg_mask = mycv2.bitwise_not(bg_mask_inv)
     Helper.log_overlay(img, bg_mask)
-    bg_maskC3 = cv2.merge([bg_mask, bg_mask, bg_mask])
-    masked_img = cv2.bitwise_and(img, bg_maskC3)
-    masked_img_eq = equalizeMulti(img)
-    Helper.log_pic(masked_img_eq)
+    bg_mask_3c = cv2.merge([bg_mask, bg_mask, bg_mask])
+    bg_masked_img = cv2.bitwise_and(img, bg_mask_3c)
+    # color = ('b', 'g', 'r')
+    # for i, col in enumerate(color):
+    #     histr = cv2.calcHist([bg_masked_img], [i], None, [256], [0, 256])
+    #     line, = plt.plot(histr, color=col)
+    #     line.axes.set_yscale('log', basey=2)
+    #     plt.xlim([0, 256])
+    # plt.show()
+    masked_img_eq = equalizeMulti(bg_masked_img)
 
     dist_transform = mycv2.distanceTransform(threshold, cv2.DIST_L2, cv2.DIST_MASK_5)
     _, best_fg = mycv2.threshold(dist_transform, r1, 255, cv2.THRESH_BINARY)
     best_fg = best_fg.astype(numpy.uint8)
+    fg_mask_3c = cv2.merge([best_fg, best_fg, best_fg])
+    fg_masked_img = cv2.bitwise_and(img, fg_mask_3c)
+    # bg_hist = cv2.calcHist(bg_masked_img, [0, 1, 2], bg_mask_3c, [256], [0, 256])
+    # color = ('b', 'g', 'r')
+    # for i, col in enumerate(color):
+    #     histr = cv2.calcHist([fg_masked_img], [i], None, [256], [0, 256])
+    #     line, = plt.plot(histr, color=col)
+    #     line.axes.set_yscale('log', basey=2)
+    #     plt.xlim([0, 256])
+    # plt.show()
     Helper.log_overlay(img, best_fg)
+    h = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)[:,:,0]
+    # mask.size() == imsize & & mask.channels() == 1
+    h_m = cv2.bitwise_and(h, best_fg)
+    bg_hist = cv2.calcHist([h_m], [0], best_fg, [256], [0, 256])
+    bg_hist_norm = cv2.normalize(bg_hist, bg_hist, 0, 255, cv2.NORM_MINMAX)
+    bp = cv2.calcBackProject([h], [0], bg_hist_norm, [0, 256], 1)
+    Helper.log_pic(bp)
 
-    best_fg_stats = ContourStats.find_contours(best_fg, lambda r: (4 < r.area))
+    best_fg_stats = ContourStats.find_contours(bp_tm, lambda r: (4 < r.area))
     markers = numpy.zeros(gray.shape, dtype=numpy.int32)
     for i, s in enumerate(best_fg_stats, 2):
         cv2.drawContours(markers, [s.contour], ALL_CONTOURS, i, thickness=cv2.FILLED, lineType=cv2.LINE_8)
-    masked_markers = mycv2.multiply(markers, bg_mask/255, dtype=cv2.CV_32S)
+    masked_markers = mycv2.multiply(markers, bg_mask_inv/255, dtype=cv2.CV_32S)
     masked_markers[gray == 0] = 1
-    Helper.log_overlay(img, masked_markers)
     markers_after_watershed = mycv2.watershed(masked_img_eq, masked_markers)
     Helper.log_pics([markers_after_watershed])
     markers_culled = delete_bad_labels(markers_after_watershed)
     Helper.log_pics([markers_culled])
     markers_bin = numpy.zeros(gray.shape, dtype=numpy.uint8)
     markers_bin[markers_culled > 2] = 255
-    Helper.log_overlay(img, markers_bin)
-    r, K2 = get_normal_kernel(img, markers_bin)
+    r, K2, bp2 = get_sample_parameters(img, markers_bin)
     markers_bin2 = cv2.morphologyEx(markers_bin, cv2.MORPH_OPEN, K2)
-    Helper.log_overlay(img, markers_bin2)
-    Helper.log('markers diff', [cv2.absdiff(markers_bin, markers_bin2)])
 
     stats = ContourStats.find_contours(markers_bin2, lambda r: 16 < r.area < 3000)
     stats.sort(key=lambda r: r.area, reverse=True)
-    outlines = numpy.zeros(img.shape, numpy.int8)
-    for i, s in enumerate(stats):
-        i_ = 20 * (i % 8) + 90
-        cv2.drawContours(outlines, [s.contour], ALL_CONTOURS, (i_, -i_, 255), thickness=1, lineType=cv2.LINE_8)
-    Helper.log('color3', [cv2.add(img, outlines, dtype=cv2.CV_8UC3)])
     return stats
 
 
@@ -85,20 +87,56 @@ def delete_bad_labels(markers_after_watershed):
     return markers_culled
 
 
-def get_normal_kernel(img, mask, b=1/3.0):
-    stats = ContourStats.find_contours(mask, lambda r: (2 ** 3 < r.area < 2 ** 12 and r.roundness < 0.2))
-    markers = numpy.zeros(mask.shape, dtype=numpy.uint8)
-    for i, s in enumerate(stats, 1):
-        cv2.drawContours(markers, [s.contour], -1, 255, thickness=cv2.FILLED, lineType=cv2.LINE_4)
-    Helper.log_overlay(img, markers)
-    rads = map(lambda s: s.radius, stats)
+def get_sample_parameters(img, mask, b=1 / 2.5):
+    stats = ContourStats.find_contours(mask)
+    stats_normal = filter(lambda r: (2 ** 3 < r.area < 2 ** 12 and r.roundness < 0.2), stats)
+    draw_stats(mask, stats_normal)
+    rads = map(lambda s: s.radius, stats_normal)
     avg = numpy.average(rads)
+    rk_avg = int(avg) * 2 - 1
+    K_AVG = mycv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rk_avg, rk_avg))
     std = numpy.std(rads)
     lim = avg * b
     Helper.logText('radius limit: sigma({2:.2f}), avg({0:.2f}) * {1:.2f}  = {3}', avg, b, std, lim)
-    k_size = int(lim) * 2 + 1
+    k_size = int(math.ceil(lim)) * 2 + 1
     K = mycv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_size, k_size))
-    return lim, K
+    stats_normal.sort(key=lambda s: s.area)
+    mid_point = len(stats_normal) / 2
+    mid = map(lambda s: s.contour, stats_normal[mid_point-5:mid_point+5])
+    hist_mask = numpy.zeros(mask.shape, numpy.uint8)
+    cv2.drawContours(hist_mask, mid, -1, 255, thickness=cv2.FILLED)
+    hist_mask_d = cv2.dilate(hist_mask, K_RECT_3)
+    hist_mask_e = cv2.erode(hist_mask_d, K_CIRCLE_7)
+    borders = hist_mask_d - hist_mask_e
+    Helper.log_overlay(img, borders)
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+    mask_morph = cv2.morphologyEx(mask, cv2.MORPH_OPEN, K_AVG)
+    Helper.log_overlay(img, mask_morph)
+
+    h_bins = 180
+    s_bins = 255
+    histSize = [s_bins]
+
+    h_range = [0, 179]
+    s_range = [0, 255]
+    ranges = s_range
+
+    channels = [1]
+
+    colony_hist = cv2.calcHist([hsv], channels, borders, histSize, ranges)
+    cv2.normalize(colony_hist, colony_hist, 0, 255, cv2.NORM_MINMAX)
+    bp = cv2.calcBackProject([hsv], channels, colony_hist, ranges, 1)
+    return lim, K, bp
+
+
+def draw_stats(img, *stats):
+    masks = [img]
+    for stat in stats:
+        mask = numpy.zeros(list(img.shape[0:2]), dtype=numpy.uint8)
+        for i, s in enumerate(stat, 1):
+            cv2.drawContours(mask, [s.contour], -1, 128 + (i % 16) * 8, thickness=cv2.FILLED, lineType=cv2.LINE_4)
+        masks.append(mask)
+    Helper.log_pics(masks)
 
 
 def churn(roi, stats):
@@ -193,14 +231,14 @@ def churn(roi, stats):
     cv2.drawContours(roi_marked, green2, -1, (0, 255, 0))
     Helper.logText("draw green")
     _, buf_mark = cv2.imencode('.jpg', roi_marked)
-    image_data_mark = io.BytesIO(buf_mark)
+    image_data_mark = StringIO(buf_mark)
     worksheet2 = workbook.add_worksheet()
     worksheet2.insert_image(0, 0, 'marked', {'image_data': image_data_mark, 'positioning': 2})
     worksheet2.set_zoom(50)
     Helper.logText("encoded marked")
 
     _, buf_raw = cv2.imencode('.jpg', roi)
-    image_data_raw = io.BytesIO(buf_raw)
+    image_data_raw = StringIO(buf_raw)
     worksheet3 = workbook.add_worksheet()
     worksheet3.insert_image(0, 0, 'raw', {'image_data': image_data_raw, 'positioning': 2})
     worksheet3.set_zoom(50)
@@ -224,7 +262,7 @@ def churn(roi, stats):
 
 def make_image_arg(s, slc):
     __, buf1 = cv2.imencode('.jpg', slc)
-    image_data1 = io.BytesIO(buf1)
+    image_data1 = StringIO(buf1)
     image_arg1 = {'image_data': image_data1, 'positioning': 1}
     a_height = s.height + RECT_SUB_PIX_PADDING
     a_width = s.width + RECT_SUB_PIX_PADDING
@@ -246,21 +284,41 @@ def process_file(filename):
     if orig.shape[0] < orig.shape[1]:
         orig = numpy.rot90(orig, 3)
         Helper.logText("rotated")
-    masked, blown = blowup(orig)
+    masked = blowup_threshold(orig)
     Helper.log_pics([masked])
-    Helper.log_pics([blown])
     rois = findROIs(masked)
     roi = rois[0]
-    [roi_color] = cropROI(roi, blown)
-    # roi_color = blown
-    Helper.log_pics([roi_color])
+    [roi_color_pre] = cropROI(roi, orig)
+    roi_color = blowup_roi(roi_color_pre)
+    Helper.log("roi_color", roi_color)
     st = find_colonies1(roi_color)
     if len(st) == 0: return
+    # colonies1_merged = churn(roi_color, st)
+    # Helper.log(file_path, colonies1_merged)
     # data = [s.__getstate__() for s in st]
     # df = pandas.DataFrame(data)
-    # df.to_csv(filename + '.csv')
-    colonies1_merged = churn(roi_color, st)
-    Helper.log(file_path, colonies1_merged)
+    js_data = json.dumps(st, cls=NumpyAwareJSONEncoder)
+    js_string = """
+<canvas id="c" width="1900" height="1900"></canvas>
+<script>
+'use strict'
+    var d = {0};
+    var e = document.getElementById('roi_color.png');
+    var imgInstance = new fabric.Image(e);
+    var dp = d.map(x => x.contour.map(a => a[0]))
+        .map(c => 'M' + c.map(p => p.join(',')).join('L') + 'z');
+    var canvas = new fabric.Canvas('c');
+    canvas.add(imgInstance);
+    var paths = dp.map(c => new fabric.Path(c).set({{ fill: 'red', stroke: 'green', opacity: 0.5 }}).);
+    document.getElementById('c').scrollIntoView();
+    document.onkeyup = (e) => {
+        if(e.keyCode == 46) {
+            canvas.remove(canvas.getActiveObject());
+        }
+    }
+);
+</script>""".format(js_data)
+    Helper.write_to_html(js_string)
 
 
 
@@ -295,13 +353,14 @@ def process_file(filename):
 #
 # DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
 # DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
-DIR_NAME = r"C:\code\6broad\.data\CFU\CFU(2)"
+DIR_NAME = r"C:\Users\refael\Downloads"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
-files = os.listdir(DIR_NAME)[1:2]
+# files = os.listdir(DIR_NAME)[1:2]
 # random.shuffle(files)
 # files = ['2016-03-28 17.51.21.jpg'] # EASY
 # files = ['E072_d7.JPG'] # EASY
 # files = ['E072_g7.JPG'] # HARD
+files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
 OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\ZBA"

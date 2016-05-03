@@ -2,25 +2,59 @@ import time
 import webbrowser
 import traceback
 import math
-import cv2
-import numpy
 import os
 import sys
 from logging import FileHandler
-from vlogging import VisualRecord as _VisualRecord
-import inspect
 import logging
 import re
 from string import Template
+import json
+
+import cv2
+import numpy
+from vlogging import VisualRecord as _VisualRecord
+import scipy.ndimage as scind
 from pydash import py_
+#import pandas
 
 
 DILATOR_SIZE = 100
 DEFECT_MIN_SIZE = 2
+MAX_HEIGHT = 40.0
+MAX_WIDTH = 10.0
+ADJUSTED_HEIGHT = (MAX_HEIGHT - 1) * 1.4 - 2.0
+ADJUSTED_WIDTH = (MAX_WIDTH - 1) * 8.0 - 2.0
+RECT_SUB_PIX_PADDING = 20
+K_RECT_3 = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+K_CIRCLE_7 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+K_CIRCLE_9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+K_CIRCLE_15 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+K_CIRCLE_21 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
+ADAPTIVE_BLOCK_SIZE = 51
+ALL_CONTOURS = -1
+COLORMAP = [(255,0,0),
+(0,255,0),
+(0,0,255),
+(255,255,0),
+(255,00,255),
+(0,255,255),
+]
+
+
+
+class NumpyAwareJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, ContourStats):
+            return obj.__dict__
+        if isinstance(obj, numpy.ndarray):
+            return obj.tolist()
+        elif isinstance(obj, numpy.generic):
+            return obj.item()
+        return json.JSONEncoder.default(self, obj)
 
 
 class VisualRecord(_VisualRecord):
-    def __init__(self, title, imgs, footnotes="", fmt="png"):
+    def __init__(self, title, imgs, footnotes="", fmt="jpg"):
         if isinstance(imgs, (list, tuple, set, frozenset)):
             multi = True
         else:
@@ -36,7 +70,7 @@ class VisualRecord(_VisualRecord):
                 fact = 1.0 / len(imgs) * (1900.0 / max_w)
                 imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=fact, fy=fact) for img in imgs]
         else:
-            pass
+            fmt='png'
             # imgs = cv2.resize(imgs.astype(numpy.uint8), None, fx=0.5, fy=0.5)
 
         _VisualRecord.__init__(self, title, imgs, footnotes, fmt)
@@ -63,7 +97,7 @@ class Helper(object):
     htmlfile = 'cfu4you' + time_stamp + '.html'
     fh = FileHandler(htmlfile, mode="w")
     fh._old_close = fh.close
-    fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style>\n')
+    fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style><script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.5.0/fabric.min.js"></script>\n')
 
     def on_log_close(h=htmlfile, fh=fh):
         if 'last_type' in sys.__dict__:
@@ -84,6 +118,12 @@ class Helper(object):
     logger.addHandler(ch)
     ts = time.time()
 
+
+    @classmethod
+    def write_to_html(cls, text):
+        cls.fh.stream.write(text)
+
+
     def __getattribute__(self, met):
         ret = object.__getattribute__(cv2, met)
         if not hasattr(ret, '__call__') or met in ('waitKey', 'circle'):
@@ -99,35 +139,42 @@ class Helper(object):
         return wrapped
 
     @classmethod
-    def log_format_message(cls, msg, *args):
+    def log_format_message(cls, msg):
         old = cls.ts
         cls.ts = time.time()
         d = cls.ts - old
         formatted_lines = traceback.format_stack()
         good_lines = filter(lambda s: 'in log' not in s, formatted_lines)
         line_no = good_lines[-1].split(',')[1][1:]
-        d_msg = "[{0:4.0f}]ms - {1:<8} - {2}".format(d * 1000, line_no, msg.format(*args))
+        d_msg = "[{0:4.0f}]ms - {1:<8} - {2}".format(d * 1000, line_no, msg)
         return d_msg
 
     @classmethod
     def logText(cls, msg, *args):
-        d_msg = cls.log_format_message(msg, *args)
+        r_msg = msg.format(*args)
+        d_msg = cls.log_format_message(r_msg)
         cls.logger.info(d_msg)
+        return r_msg
 
     @classmethod
     def log(cls, msg, imgs, *args):
-        cls.logText(msg, args)
-        cls.logger.debug(VisualRecord("", imgs))
+        t = cls.logText(msg, args)
+        cls.logger.debug(VisualRecord(t, imgs))
         cls.fh.flush()
 
     @classmethod
     def log_pics(cls, imgs, save=False, *args):
         formatted_lines = traceback.format_stack()
-        var_names = re.split('\[|\]', formatted_lines[-2])[1]
-        names = re.split(', ?', var_names)
+        call_code = formatted_lines[-2]
+        if '[' in call_code:
+            var_names = re.split('\[|\]', call_code)[1]
+            names = re.split(', ?', var_names)
+        else:
+            var_names = ''
+            names = range(len(imgs), 1)
         if save:
             for n, im in zip(names, imgs):
-                cv2.imwrite(cls.OUTPUT_PREFIX + '_' + n + '.jpg', im)
+                cv2.imwrite(cls.OUTPUT_PREFIX + '_' + str(n) + '.jpg', im)
         cls.log(var_names, imgs, *args)
 
     @classmethod
@@ -156,9 +203,11 @@ class Helper(object):
 """:type : cv2"""
 mycv2 = Helper()
 
-
-def equalizeMulti(img):
-    return cv2.merge([cv2.equalizeHist(c) for c in cv2.split(img)])
+CLAHE = mycv2.createCLAHE(clipLimit=2.0, tileGridSize=(10, 10))
+def equalizeMulti(img, is_clahe=False, chans=[0,1,2]):
+    f1 = CLAHE.apply if is_clahe else cv2.equalizeHist
+    f2 = lambda i, c: f1(c) if i in chans else c
+    return cv2.merge([f2(*p) for p in enumerate(cv2.split(img))])
 
 
 def block(shape, block_shape):
@@ -193,55 +242,84 @@ def block(shape, block_shape):
     return labels, indexes
 
 
-# def preprocess(img, block_size):
-#     # For background, we create a labels image using the block
-#     # size and find the minimum within each block.
-#     Helper.logText('preprocess 1')
-#     labels, indexes = block(img.shape[:2], numpy.array((block_size, block_size)))
-#     Helper.logText('preprocess 2')
-#     min_block = numpy.zeros(img.shape)
-#     Helper.logText('preprocess 3')
-#     minima = scind.minimum(img, labels, indexes)
-#     Helper.logText('preprocess 4')
-#     min_block[labels != -1] = minima[labels[labels != -1]]
-#     Helper.logText('preprocess 5')
-#     ret = min_block.astype(numpy.uint8)
-#     Helper.logText('preprocess 6')
-#     return ret
+def preprocess(img, block_size):
+    # For background, we create a labels image using the block
+    # size and find the minimum within each block.
+    Helper.logText('preprocess 1')
+    labels, indexes = block(img.shape[:2], numpy.array((block_size, block_size)))
+    Helper.logText('preprocess 2')
+    min_block = numpy.zeros(img.shape)
+    Helper.logText('preprocess 3')
+    minima = scind.minimum(img, labels, indexes)
+    Helper.logText('preprocess 4')
+    min_block[labels != -1] = minima[labels[labels != -1]]
+    Helper.logText('preprocess 5')
+    ret = min_block.astype(numpy.uint8)
+    Helper.logText('preprocess 6')
+    return ret
 
 
-def blowup(img):
-    img = mycv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    h,s,v = mycv2.split(img)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(10, 10))
-    h = h#clahe.apply(h)
-    v = clahe.apply(v)
-    s = clahe.apply(cv2.multiply(s, 2))
-    per = int(numpy.percentile(v, 90))
-    v90 = cv2.subtract(v, per)
-    blown_hsv = cv2.merge([h,s,v])
-    blown = cv2.cvtColor(blown_hsv, cv2.COLOR_HSV2BGR)
-    _, threshold = cv2.threshold(v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    return threshold, blown
+def blowup_threshold(img):
+    img2 = equalizeMulti(img, True)
+    v1 = mycv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    v2 = numpy.square(v1.astype(numpy.uint32))
+    v4 = numpy.square(v2)
+    v_t = numpy.right_shift(v4, 24).astype(numpy.uint8)
+    per = int(numpy.percentile(v_t, 70))
+    v90 = mycv2.subtract(v_t, per)
+    v_eq = mycv2.equalizeHist(v90)
+    Helper.log_pics([v1, v_t, v_eq])
+    _, threshold = mycv2.threshold(v_eq, 100, 255, cv2.THRESH_BINARY)
+    return threshold
 
 
-# def deluminate(img, rad=70):
-#     krad = rad + (0 if rad % 2 else 1)
-#
-#     # smoothed_image = cv2.medianBlur(img, krad)
-#     # img1 = mycv2.resize(smoothed_image, (img.shape[1] / rad, img.shape[0] / rad), interpolation=cv2.INTER_LINEAR)
-#     # avg_image = mycv2.resize(img1, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
-#     # smoothed_image2 = mycv2.medianBlur(avg_image, krad)
-#     # delumi = mycv2.subtract(img, smoothed_image / 2, dtype=cv2.CV_8U)
-#     # delumi[delumi < 64] = 0
-#
-#     smoothed_image = mycv2.medianBlur(img, krad)
-#     avg_image = preprocess(smoothed_image, rad)
-#     smoothed_image2 = mycv2.blur(avg_image, (krad, krad))
-#     delumi = mycv2.subtract(img, smoothed_image2, dtype=cv2.CV_8U)
-#     normalized = mycv2.equalizeHist(delumi)
-#     Helper.log('deluminate', [img, smoothed_image, avg_image, smoothed_image2, delumi, normalized])
-#     return normalized
+def blowup_roi(img):
+    img1 = equalizeMulti(img)
+    img2 = equalizeMulti(img1, True, [0])
+    img_hsv = mycv2.cvtColor(img2, cv2.COLOR_BGR2HSV)
+    h,s,v = mycv2.split(img_hsv)
+    v1 = CLAHE.apply(v)
+    v1d = deluminate(v)
+    Helper.log_pic(v1d)
+    t = cv2.adaptiveThreshold(v1d, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, -0.1)
+    t1 = cv2.erode(t, K_CIRCLE_15)
+    t2 = cv2.morphologyEx(t1, cv2.MORPH_CLOSE, K_CIRCLE_21)
+    ret, markers = cv2.connectedComponents(t1)
+    markers[markers == -1] = 0
+    m = cv2.watershed(img2, markers)
+    Helper.log_pic(m.astype(numpy.uint8))
+    Helper.log_pic(t1)
+    Helper.log_pic(t2)
+    v2 = numpy.square(v1.astype(numpy.uint32))
+    v4 = numpy.square(v2)
+    v_t = numpy.right_shift(v4, 24).astype(numpy.uint8)
+    per = int(numpy.percentile(v_t, 70))
+    v90 = mycv2.subtract(v_t, per)
+    v_eq = mycv2.equalizeHist(v90)
+    Helper.log_pics([v, v1, v_t, v_eq, s, h])
+    blown_hsv = mycv2.merge([h,s,v1d])
+    blown = mycv2.cvtColor(blown_hsv, cv2.COLOR_HSV2BGR)
+    return blown
+
+
+def deluminate(img, rad=50):
+    krad = rad + (0 if rad % 2 else 1)
+
+    # smoothed_image = cv2.medianBlur(img, krad)
+    # img1 = mycv2.resize(smoothed_image, (img.shape[1] / rad, img.shape[0] / rad), interpolation=cv2.INTER_LINEAR)
+    # avg_image = mycv2.resize(img1, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+    # smoothed_image2 = mycv2.medianBlur(avg_image, krad)
+    # delumi = mycv2.subtract(img, smoothed_image / 2, dtype=cv2.CV_8U)
+    # delumi[delumi < 64] = 0
+
+    smoothed_image = mycv2.medianBlur(img, krad)
+    avg_image = preprocess(smoothed_image, rad)
+    smoothed_image2 = mycv2.blur(avg_image, (krad, krad))
+    delumi = mycv2.subtract(img, smoothed_image2, dtype=cv2.CV_8U)
+    delumi[delumi < 16] = 0
+    normalized = mycv2.equalizeHist(delumi)
+    Helper.log('deluminate', [img, smoothed_image, avg_image, smoothed_image2, delumi, normalized])
+    return normalized
 
 
 
@@ -369,12 +447,13 @@ class ContourStats(object):
             self.count = 1 if self.reduced_defects < 2 else self.reduced_defects
 
     def __getstate__(self):
-        state = self.__dict__
+        state = dict(self.__dict__)
         del state['contour']
         del state['M']
         del state['rect']
         del state['hull']
         del state['defects']
+        del state['hierarchy']
         return state
 
     @classmethod
@@ -418,6 +497,9 @@ class ContourStats(object):
 
     @classmethod
     def find_contours(cls, img, predicate=lambda x:x, mode=cv2.CHAIN_APPROX_NONE):
+        """
+        @rtype: Tuple[ContourStats]
+        """
         ret = cv2.findContours(img.copy(), cv2.RETR_TREE, mode)
         img_marked, contours, [hierarchy] = ret
         stats = py_(contours)\
