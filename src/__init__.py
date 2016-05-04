@@ -3,8 +3,10 @@ from datetime import datetime
 import math
 from io import BytesIO as StringIO
 import os
+CUR_DIR = os.path.dirname(__file__)
 
-
+with open(os.path.join(CUR_DIR, r'..\assets\cfugui.js'), 'r') as content_file:
+    script_code = content_file.read()
 
 
 def find_colonies1(img):
@@ -301,23 +303,13 @@ def process_file(filename):
     js_string = """
 <canvas id="c" width="1900" height="1900"></canvas>
 <script>
-'use strict'
-    var d = {0};
-    var e = document.getElementById('roi_color.png');
-    var imgInstance = new fabric.Image(e);
-    var dp = d.map(x => x.contour.map(a => a[0]))
-        .map(c => 'M' + c.map(p => p.join(',')).join('L') + 'z');
-    var canvas = new fabric.Canvas('c');
-    canvas.add(imgInstance);
-    var paths = dp.map(c => new fabric.Path(c).set({{ fill: 'red', stroke: 'green', opacity: 0.5 }}).);
-    document.getElementById('c').scrollIntoView();
-    document.onkeyup = (e) => {
-        if(e.keyCode == 46) {
-            canvas.remove(canvas.getActiveObject());
-        }
-    }
-);
-</script>""".format(js_data)
+var d = {0};
+</script>
+<script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.5.0/fabric.min.js"></script>
+<script>
+{1}
+</script>
+""".format(js_data, script_code)
     Helper.write_to_html(js_string)
 
 
@@ -351,16 +343,16 @@ def process_file(filename):
 # DIR_NAME = r"V:\CFU\5"
 # files = ["IMG_20151125_183850.png"]
 #
-# DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
+DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
 # DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
-DIR_NAME = r"C:\Users\refael\Downloads"
+# DIR_NAME = r"C:\Users\refael\Downloads"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # files = os.listdir(DIR_NAME)[1:2]
 # random.shuffle(files)
 # files = ['2016-03-28 17.51.21.jpg'] # EASY
-# files = ['E072_d7.JPG'] # EASY
+files = ['E072_d7.JPG'] # EASY
 # files = ['E072_g7.JPG'] # HARD
-files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
+# files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
 OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\ZBA"

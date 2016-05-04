@@ -15,7 +15,7 @@ import numpy
 from vlogging import VisualRecord as _VisualRecord
 import scipy.ndimage as scind
 from pydash import py_
-#import pandas
+import pandas
 
 
 DILATOR_SIZE = 100
@@ -97,7 +97,7 @@ class Helper(object):
     htmlfile = 'cfu4you' + time_stamp + '.html'
     fh = FileHandler(htmlfile, mode="w")
     fh._old_close = fh.close
-    fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style><script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.5.0/fabric.min.js"></script>\n')
+    fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style>\n')
 
     def on_log_close(h=htmlfile, fh=fh):
         if 'last_type' in sys.__dict__:
@@ -113,7 +113,7 @@ class Helper(object):
 
     ch = logging.StreamHandler()
     ch.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s - %(message)s')
+    formatter = logging.Formatter('%(asctime)s:%(msecs)03d %(message)s', "%S")
     ch.setFormatter(formatter)
     logger.addHandler(ch)
     ts = time.time()
@@ -133,7 +133,7 @@ class Helper(object):
             t0 = time.time()
             i_ret = ret(*iargs, **ikwargs)
             t = time.time() - t0
-            Helper.logText("{0:<30} [{1:4}]ms", met, int(t * 1000))
+            Helper.logText("{0:<50} {1:4}-cv2", met, int(t * 1000))
             return i_ret
 
         return wrapped
@@ -146,7 +146,7 @@ class Helper(object):
         formatted_lines = traceback.format_stack()
         good_lines = filter(lambda s: 'in log' not in s, formatted_lines)
         line_no = good_lines[-1].split(',')[1][1:]
-        d_msg = "[{0:4.0f}]ms - {1:<8} - {2}".format(d * 1000, line_no, msg)
+        d_msg = "[{0:4.0f}] {1:<8} :  {2}".format(d * 1000, line_no, msg)
         return d_msg
 
     @classmethod
