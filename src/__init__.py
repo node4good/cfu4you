@@ -3,9 +3,12 @@ from datetime import datetime
 import math
 from io import BytesIO as StringIO
 import os
+import vlogging
+import pandas
 CUR_DIR = os.path.dirname(__file__)
 
-with open(os.path.join(CUR_DIR, r'..\assets\cfugui.js'), 'r') as content_file:
+js_file = os.path.join(CUR_DIR, r'..\assets\cfugui.js')
+with open(js_file, 'r') as content_file:
     script_code = content_file.read()
 
 
@@ -299,18 +302,33 @@ def process_file(filename):
     # Helper.log(file_path, colonies1_merged)
     # data = [s.__getstate__() for s in st]
     # df = pandas.DataFrame(data)
+    file_name = os.path.join(OUTPUT_DIR, "output" + Helper.time_stamp + ".html")
+    img_file = file_name + ".png"
     js_data = json.dumps(st, cls=NumpyAwareJSONEncoder)
     js_string = """
-<canvas id="c" width="1900" height="1900"></canvas>
+<!DOCTYPE html>
+<html>
+
+<head>
+<script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.6.1/fabric.min.js"></script>
+</head>
+
+<body>
+<canvas id="c"></canvas>
 <script>
 var d = {0};
+var img_src = "{1}";
 </script>
-<script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.5.0/fabric.min.js"></script>
-<script>
-{1}
-</script>
-""".format(js_data, script_code)
-    Helper.write_to_html(js_string)
+<script src="file://{4}"></script>
+<a href="file://{3}">log</a></br>
+</body>
+
+</html>
+""".format(js_data, img_file.replace('\\', '/'), script_code, Helper.htmlfile, js_file.replace('\\', '/'))
+    cv2.imwrite(img_file, roi_color)
+    with open(file_name, 'w') as output_file:
+        output_file.write(js_string)
+    webbrowser.open_new_tab(file_name)
 
 
 

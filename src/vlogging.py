@@ -1,69 +1,66 @@
 # -*- coding: utf-8 -*-
 
-from io import BytesIO as StringIO
 from string import Template
 import base64
+import cv2
+import numpy
+
 
 __version__ = "0.2"
-renderers = []
 
-try:
-    import cv2
-    import numpy
 
-    def render_opencv(img, fmt="png"):
-        if not isinstance(img, numpy.ndarray):
-            return None
+def renderer(img, fmt):
+    if not isinstance(img, numpy.ndarray):
+        return None
 
-        retval, buf = cv2.imencode(".%s" % fmt, img)
-        if not retval:
-            return None
+    encode_param = [int(cv2.IMWRITE_WEBP_QUALITY), 90] if (fmt == 'webp') else None
 
-        return buf, "image/%s" % fmt
+    r, buf = cv2.imencode(".%s" % fmt, img, params=encode_param)
+    if not r:
+        return None
 
-    renderers.append(render_opencv)
-except ImportError:
-    pass
+    out = "data:image/{0};base64,{1}".format(fmt, base64.b64encode(buf))
+    return out
 
-try:
-    from PIL import Image
 
-    def render_pil(img, fmt="png"):
-        if not callable(getattr(img, "save", None)):
-            return None
+def render_images(imgs, fmt="png", title=None):
+    rendered = []
 
-        output = StringIO()
-        img.save(output, format=fmt)
-        contents = output.getvalue()
-        output.close()
+    for img in imgs:
+        res = renderer(img, fmt)
+        if res is None:
+            continue
+        else:
+            rendered.append(res)
+            break
 
-        return contents, "image/%s" % fmt
-
-    renderers.append(render_pil)
-except ImportError:
-    pass
-
-try:
-    import pylab
-
-    def render_pylab(img, fmt="png"):
-        if not callable(getattr(img, "savefig", None)):
-            return None
-
-        output = StringIO()
-        img.savefig(output, format=fmt)
-        contents = output.getvalue()
-        output.close()
-
-        return contents, "image/%s" % fmt
-
-    renderers.append(render_pylab)
-except ImportError:
-    pass
+    return "".join(
+        Template('<img download="$name" id="$name" src="$data_uri" />').substitute({
+            "data_uri": data,
+            "name": str(title or data[25:28]) + "." + str(fmt or "unk")
+        }) for data in rendered)
 
 
 class VisualRecord(object):
-    def __init__(self, title="", imgs=None, footnotes="", fmt="png"):
+    def __init__(self, title, imgs, footnotes="", fmt="jpg"):
+        if isinstance(imgs, (list, tuple, set, frozenset)):
+            multi = True
+        else:
+            imgs = [imgs]
+            multi = False
+
+        if max(imgs[0].shape[:2]) < 500:
+            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=2, fy=2) for img in imgs]
+
+        if multi:
+            max_w = imgs[0].shape[1]
+            if max_w > 1900:
+                fact = 1.0 / len(imgs) * (1900.0 / max_w)
+                imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=fact, fy=fact) for img in imgs]
+        else:
+            fmt='png'
+            # imgs = cv2.resize(imgs.astype(numpy.uint8), None, fx=0.5, fy=0.5)
+
         self.title = title
         self.fmt = fmt
 
@@ -77,25 +74,6 @@ class VisualRecord(object):
 
         self.footnotes = footnotes
 
-    def render_images(self):
-        rendered = []
-
-        for img in self.imgs:
-            for renderer in renderers:
-                # Trying renderers we have one by one
-                res = renderer(img, self.fmt)
-
-                if res is None:
-                    continue
-                else:
-                    rendered.append(res)
-                    break
-
-        return "".join(
-            Template('<img src="data:$mime;base64,$data" />').substitute({
-                "data": base64.b64encode(data),
-                "mime": mime
-            }) for data, mime in rendered)
 
     def render_footnotes(self):
         if not self.footnotes:
@@ -105,16 +83,16 @@ class VisualRecord(object):
             "footnotes": self.footnotes
         })
 
+
     def __str__(self):
-        t = Template(
-            """
-            <h4>$title</h4>
-            $imgs
-            $footnotes
-            <hr/>""")
+        t = Template("""
+<h4>$title</h4>
+<span style="white-space: nowrap">$imgs</span>
+$footnotes
+<hr/>""")
 
         return t.substitute({
             "title": self.title,
-            "imgs": self.render_images(),
+            "imgs": render_images(self.imgs, self.fmt, self.title),
             "footnotes": self.render_footnotes()
         })

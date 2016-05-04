@@ -7,15 +7,13 @@ import sys
 from logging import FileHandler
 import logging
 import re
-from string import Template
 import json
 
 import cv2
 import numpy
-from vlogging import VisualRecord as _VisualRecord
+from vlogging import VisualRecord
 import scipy.ndimage as scind
 from pydash import py_
-import pandas
 
 
 DILATOR_SIZE = 100
@@ -53,43 +51,6 @@ class NumpyAwareJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-class VisualRecord(_VisualRecord):
-    def __init__(self, title, imgs, footnotes="", fmt="jpg"):
-        if isinstance(imgs, (list, tuple, set, frozenset)):
-            multi = True
-        else:
-            imgs = [imgs]
-            multi = False
-
-        if max(imgs[0].shape[:2]) < 500:
-            imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=2, fy=2) for img in imgs]
-
-        if multi:
-            max_w = imgs[0].shape[1]
-            if max_w > 1900:
-                fact = 1.0 / len(imgs) * (1900.0 / max_w)
-                imgs = [cv2.resize(img.astype(numpy.uint8), None, fx=fact, fy=fact) for img in imgs]
-        else:
-            fmt='png'
-            # imgs = cv2.resize(imgs.astype(numpy.uint8), None, fx=0.5, fy=0.5)
-
-        _VisualRecord.__init__(self, title, imgs, footnotes, fmt)
-
-
-    def __str__(self):
-        t = Template("""
-<h4>$title</h4>
-<span style="white-space: nowrap">$imgs</span>
-$footnotes
-<hr/>""")
-
-        return t.substitute({
-            "title": self.title,
-            "imgs": self.render_images(),
-            "footnotes": self.render_footnotes()
-        })
-
-
 class Helper(object):
     OUTPUT_PREFIX = ''
     time_stamp = format(int((time.time() * 10) % 10000000), "6d")
@@ -99,14 +60,14 @@ class Helper(object):
     fh._old_close = fh.close
     fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style>\n')
 
-    def on_log_close(h=htmlfile, fh=fh):
-        if 'last_type' in sys.__dict__:
-            print '/'.join(["file:/", os.getcwd().replace('\\', '/'), h])
-        else:
-            webbrowser.open_new_tab(h)
-        fh._old_close()
-
-    fh.close = on_log_close
+    # def on_log_close(h=htmlfile, fh=fh):
+    #     if 'last_type' in sys.__dict__:
+    #         print '/'.join(["file:/", os.getcwd().replace('\\', '/'), h])
+    #     else:
+    #         webbrowser.open_new_tab(h)
+    #     fh._old_close()
+    #
+    # fh.close = on_log_close
     fh.propagate = False
     logger.setLevel(logging.DEBUG)
     logger.addHandler(fh)
