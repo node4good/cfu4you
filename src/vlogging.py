@@ -32,7 +32,6 @@ def render_images(imgs, fmt="png", title=None):
             continue
         else:
             rendered.append(res)
-            break
 
     return "".join(
         Template('<img download="$name" id="$name" src="$data_uri" />').substitute({

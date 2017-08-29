@@ -3,6 +3,7 @@ from datetime import datetime
 import math
 from io import BytesIO as StringIO
 import os
+import numpy as np
 CUR_DIR = os.path.dirname(__file__)
 
 js_file = os.path.join(CUR_DIR, r'..\assets\cfugui.js')
@@ -24,6 +25,7 @@ with open(js_file, 'r') as content_file:
 # PATH_NAME = r"V:\CFU\RB\images_for_Refael\E072_d8.JPG" # Z fresh
 # PATH_NAME = r"C:\code\6broad\.data\JL\IMG_20160220_130925_data.jpg"  # Z fresh
 
+
 # IMGs = [
 # r"V:\Camera\5\IMG_20151125_182156.jpg",
 # r"V:\Camera\5\IMG_20151125_182207.jpg",
@@ -38,19 +40,20 @@ with open(js_file, 'r') as content_file:
 # DIR_NAME = r"V:\CFU\5"
 # files = ["IMG_20151125_183850.png"]
 #
-DIR_NAME = r"C:\code\6broad\.data"
+DIR_NAME = r"C:\code\6broad\.data\JL"
 # DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
 # DIR_NAME = r"C:\Users\refael\Downloads"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # files = os.listdir(DIR_NAME)[1:2]
 # random.shuffle(files)
 # files = ['2016-03-28 17.51.21.jpg'] # EASY
-files = ['20X_0_Z0_C0_T0_Z0_C0_T0.png'] # EASY
+# files = ['20X_0_Z0_C0_T0_Z0_C0_T0.png'] # EASY
 # files = ['E072_g7.JPG'] # HARD
 # files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
+files = ["IMG_20160220_130925_data_crop0.jpg"]
 
-OUTPUT_DIR = r"C:\code\6broad\.data\micro"
+OUTPUT_DIR = r"C:\code\6broad\.data\2"
 
 
 
@@ -137,7 +140,7 @@ def draw_stats(img, *stats):
     for stat in stats:
         mask = numpy.zeros(list(img.shape[0:2]), dtype=numpy.uint8)
         for i, s in enumerate(stat, 1):
-            cv2.drawContours(mask, [s.contour], -1, 128 + (i % 16) * 8, thickness=cv2.FILLED, lineType=cv2.LINE_4)
+            mycv2.drawContours(mask, [s.contour], -1, 128 + (i % 16) * 8, thickness=cv2.FILLED, lineType=cv2.LINE_4)
         masks.append(mask)
     Helper.log_pics(masks)
 
@@ -276,6 +279,28 @@ def make_image_arg(s, slc):
     return image_arg1
 
 
+def grabcut(img):
+    mask = np.zeros(img.shape[:2], np.uint8)
+    bgdModel = np.zeros((1, 13*5), np.float64)
+    fgdModel = np.zeros((1, 13*5), np.float64)
+    rect = (0, 0) + img.shape[:2]
+
+    mycv2.grabCut(img, mask, rect, bgdModel, fgdModel, 5, cv2.GC_INIT_WITH_RECT)
+
+    mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
+    img = img * mask2[:, :, np.newaxis]
+
+    Helper.log_pics([img])
+    return
+
+    # mycv2.grabCut(img, mask, rect, bgdModel, fgdModel, 3, cv2.GC_EVAL)
+    #
+    # mask2 = np.where((mask == 2) | (mask == 0), 0, 1).astype('uint8')
+    # img = img * mask2[:, :, np.newaxis]
+    #
+    # Helper.log_pics([img])
+
+
 def process_file(filename):
     # noinspection PyUnresolvedReferences
     ts = "{:%Y-%m-%d-%H-%M-%S}".format(datetime.now())
@@ -287,47 +312,37 @@ def process_file(filename):
     if orig.shape[0] < orig.shape[1]:
         orig = numpy.rot90(orig, 3)
         Helper.logText("rotated")
-    # masked = blowup_threshold(orig)
-    # Helper.log_overlay(orig, masked)
-    # rois = findROIs(masked)
-    # roi = rois[0]
-    # [roi_color_pre] = cropROI(roi, orig)
-    # core, periphery = segment(roi_color_pre)
-    # roi_color = blowup_roi(core)
-    # Helper.log("roi_color", roi_color)
-    st = find_colonies(orig)
-    if len(st) == 0: return
-    # colonies1_merged = churn(masked, st)
-    # Helper.log(file_path, colonies1_merged)
-    # data = [s.__getstate__() for s in st]
-    # df = pandas.DataFrame(data)
+    grabcut(orig)
     file_name = os.path.join(OUTPUT_DIR, "output" + Helper.time_stamp + ".html")
-    img_file = file_name + ".png"
-    js_data = json.dumps(st, cls=NumpyAwareJSONEncoder)
-    js_string = """
-<!DOCTYPE html>
-<html>
-
-<head>
-<script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.6.1/fabric.min.js"></script>
-</head>
-
-<body>
-<canvas id="c"></canvas>
-<script>
-var d = {0};
-var img_src = "{1}";
-</script>
-<script src="file://{4}"></script>
-<a href="file://{3}">log</a></br>
-</body>
-
-</html>
-""".format(js_data, img_file.replace('\\', '/'), script_code, Helper.htmlfile, js_file.replace('\\', '/'))
-    cv2.imwrite(img_file, orig)
-    with open(file_name, 'w') as output_file:
-        output_file.write(js_string)
     chrome.open_new_tab(file_name)
+    return
+
+#     img_file = file_name + ".png"
+#     js_data = json.dumps(st, cls=NumpyAwareJSONEncoder)
+#     js_string = """
+# <!DOCTYPE html>
+# <html>
+#
+# <head>
+# <script src="http://cdnjs.cloudflare.com/ajax/libs/fabric.js/1.6.1/fabric.min.js"></script>
+# </head>
+#
+# <body>
+# <canvas id="c"></canvas>
+# <script>
+# var d = {0};
+# var img_src = "{1}";
+# </script>
+# <script src="file://{4}"></script>
+# <a href="file://{3}">log</a></br>
+# </body>
+#
+# </html>
+# """.format(js_data, img_file.replace('\\', '/'), script_code, Helper.htmlfile, js_file.replace('\\', '/'))
+#     cv2.imwrite(img_file, orig)
+#     with open(file_name, 'w') as output_file:
+#         output_file.write(js_string)
+#     webbrowser.open_new_tab(file_name)
 
 
 

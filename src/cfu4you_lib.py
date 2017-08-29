@@ -1,5 +1,5 @@
 import time
-import webbrowser
+from webbrowser import WindowsDefault
 import traceback
 import math
 import os
@@ -15,8 +15,9 @@ from vlogging import VisualRecord
 import scipy.ndimage as scind
 from pydash import py_
 
-
-DILATOR_SIZE = 100
+chrome = WindowsDefault()
+DILATOR_SIZE = 150
+PLATE_PERIF_RAD = 300
 DEFECT_MIN_SIZE = 2
 MAX_HEIGHT = 40.0
 MAX_WIDTH = 10.0
@@ -60,14 +61,14 @@ class Helper(object):
     fh._old_close = fh.close
     fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style>\n')
 
-    # def on_log_close(h=htmlfile, fh=fh):
-    #     if 'last_type' in sys.__dict__:
-    #         print '/'.join(["file:/", os.getcwd().replace('\\', '/'), h])
-    #     else:
-    #         webbrowser.open_new_tab(h)
-    #     fh._old_close()
-    #
-    # fh.close = on_log_close
+    def on_log_close(h=htmlfile, fh=fh):
+        if 'last_type' in sys.__dict__:
+            print '/'.join(["file:/", os.getcwd().replace('\\', '/'), h])
+        else:
+            webbrowser.open_new_tab(h)
+        fh._old_close()
+
+    fh.close = on_log_close
     fh.propagate = False
     logger.setLevel(logging.DEBUG)
     logger.addHandler(fh)
@@ -86,8 +87,12 @@ class Helper(object):
 
 
     def __getattribute__(self, met):
-        ret = object.__getattribute__(cv2, met)
-        if not hasattr(ret, '__call__') or met in ('waitKey', 'circle'):
+        if met in ('equalizeHist',):
+            ret = object.__getattribute__(self, met)
+        else:
+            ret = object.__getattribute__(cv2, met)
+
+        if not hasattr(ret, '__call__') or met in ('waitKey', ):
             return ret
 
         def wrapped(*iargs, **ikwargs):
@@ -99,15 +104,30 @@ class Helper(object):
 
         return wrapped
 
+
+    @classmethod
+    def equalizeHist(cls, img):
+        per10 = int(numpy.percentile(img, 10))
+        per90 = numpy.max(img) - per10
+        img1 = mycv2.subtract(img, per10)
+        _, img2 = cv2.threshold(img1, per90, per90, cv2.THRESH_TRUNC)
+        fact = 255.0 / per90
+        img3 = cv2.multiply(img2, fact)
+        Helper.log_pics([img, img1, img2, img3])
+        return img3
+
+
     @classmethod
     def log_format_message(cls, msg):
         old = cls.ts
         cls.ts = time.time()
         d = cls.ts - old
-        formatted_lines = traceback.format_stack()
-        good_lines = filter(lambda s: 'in log' not in s, formatted_lines)
-        line_no = good_lines[-1].split(',')[1][1:]
-        d_msg = "[{0:4.0f}] {1:<8} :  {2}".format(d * 1000, line_no, msg)
+        stack_lines = traceback.extract_stack()
+        good_lines = filter(lambda s: s[2] and 'log' != s[2][0:3] and s[2] != 'wrapped', stack_lines)
+        line_no = good_lines[-1][1]
+        f_name = good_lines[-1][2]
+        mark = "%s:%s" % (f_name, line_no)
+        d_msg = "[{0:4.0f}] {1:<20} {2}".format(d * 1000, mark, msg)
         return d_msg
 
     @classmethod
@@ -125,8 +145,8 @@ class Helper(object):
 
     @classmethod
     def log_pics(cls, imgs, save=False, *args):
-        formatted_lines = traceback.format_stack()
-        call_code = formatted_lines[-2]
+        stack_lines = traceback.extract_stack()
+        call_code = stack_lines[-2][3]
         if '[' in call_code:
             var_names = re.split('\[|\]', call_code)[1]
             names = re.split(', ?', var_names)
@@ -164,9 +184,10 @@ class Helper(object):
 """:type : cv2"""
 mycv2 = Helper()
 
-CLAHE = mycv2.createCLAHE(clipLimit=2.0, tileGridSize=(10, 10))
-def equalizeMulti(img, is_clahe=False, chans=[0,1,2]):
-    f1 = CLAHE.apply if is_clahe else cv2.equalizeHist
+
+CLAHE = mycv2.createCLAHE(clipLimit=0.0, tileGridSize=(10, 10))
+def equalizeMulti(img, is_clahe=False, chans=(0, 1, 2)):
+    f1 = CLAHE.apply if False else mycv2.equalizeHist
     f2 = lambda i, c: f1(c) if i in chans else c
     return cv2.merge([f2(*p) for p in enumerate(cv2.split(img))])
 
@@ -221,66 +242,88 @@ def preprocess(img, block_size):
 
 
 def blowup_threshold(img):
-    img2 = equalizeMulti(img, True)
-    v1 = mycv2.cvtColor(img2, cv2.COLOR_BGR2GRAY)
+    v = mycv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    v_eq = blowup(v)
+    dilated = cv2.dilate(v_eq, K_CIRCLE_15)
+    return dilated
+
+
+def blowup(img):
+    v1 = mycv2.equalizeHist(img)
     v2 = numpy.square(v1.astype(numpy.uint32))
     v4 = numpy.square(v2)
     v_t = numpy.right_shift(v4, 24).astype(numpy.uint8)
-    per = int(numpy.percentile(v_t, 70))
-    v90 = mycv2.subtract(v_t, per)
-    v_eq = mycv2.equalizeHist(v90)
-    Helper.log_pics([v1, v_t, v_eq])
-    _, threshold = mycv2.threshold(v_eq, 100, 255, cv2.THRESH_BINARY)
-    return threshold
+    per = int(numpy.percentile(v_t, 80))
+    v_per = mycv2.subtract(v_t, per)
+    v_eq = mycv2.equalizeHist(v_per)
+    # _, t = mycv2.threshold(v_t, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    # t_closed = cv2.morphologyEx(t, cv2.MORPH_OPEN, K_CIRCLE_7)
+    # t_bin = t_closed/255
+    # v_mask = cv2.multiply(v_t, t_bin)
+    # v_eq = mycv2.equalizeHist(v_mask)
+    Helper.log_pics([img, v1, v_t, v_eq])
+    return v_eq
 
 
 def blowup_roi(img):
-    img1 = equalizeMulti(img)
-    img2 = equalizeMulti(img1, True, [0])
-    img_hsv = mycv2.cvtColor(img2, cv2.COLOR_BGR2HSV)
+    # img1 = equalizeMulti(img)
+    # img2 = equalizeMulti(img1, True, [0])
+    img_hsv = mycv2.cvtColor(img, cv2.COLOR_BGR2HSV)
     h,s,v = mycv2.split(img_hsv)
-    v1 = CLAHE.apply(v)
-    v1d = deluminate(v)
-    Helper.log_pic(v1d)
-    t = cv2.adaptiveThreshold(v1d, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, -0.1)
-    t1 = cv2.erode(t, K_CIRCLE_15)
-    t2 = cv2.morphologyEx(t1, cv2.MORPH_CLOSE, K_CIRCLE_21)
-    ret, markers = cv2.connectedComponents(t1)
-    markers[markers == -1] = 0
-    m = cv2.watershed(img2, markers)
-    Helper.log_pic(m.astype(numpy.uint8))
-    Helper.log_pic(t1)
-    Helper.log_pic(t2)
-    v2 = numpy.square(v1.astype(numpy.uint32))
-    v4 = numpy.square(v2)
-    v_t = numpy.right_shift(v4, 24).astype(numpy.uint8)
-    per = int(numpy.percentile(v_t, 70))
-    v90 = mycv2.subtract(v_t, per)
-    v_eq = mycv2.equalizeHist(v90)
-    Helper.log_pics([v, v1, v_t, v_eq, s, h])
-    blown_hsv = mycv2.merge([h,s,v1d])
+    # v1d = deluminate(v)
+    # Helper.log_pic(v1d)
+    # t = cv2.adaptiveThreshold(v, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, -0.1)
+    # t1 = cv2.erode(t, K_CIRCLE_15)
+    # t2 = cv2.morphologyEx(t1, cv2.MORPH_CLOSE, K_CIRCLE_21)
+    # ret, markers = cv2.connectedComponents(t1)
+    # markers[markers == -1] = 0
+    # m = cv2.watershed(img2, markers)
+    # Helper.log_pic(m.astype(numpy.uint8))
+    # Helper.log_pic(t1)
+    # Helper.log_pic(t2)
+    v_eq = blowup(v)
+    Helper.log_pics([v, v_eq, s, h])
+    blown_hsv = mycv2.merge([h,s,v_eq])
     blown = mycv2.cvtColor(blown_hsv, cv2.COLOR_HSV2BGR)
     return blown
 
 
-def deluminate(img, rad=50):
+def deluminate(img, rad=80):
     krad = rad + (0 if rad % 2 else 1)
 
-    # smoothed_image = cv2.medianBlur(img, krad)
-    # img1 = mycv2.resize(smoothed_image, (img.shape[1] / rad, img.shape[0] / rad), interpolation=cv2.INTER_LINEAR)
-    # avg_image = mycv2.resize(img1, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
-    # smoothed_image2 = mycv2.medianBlur(avg_image, krad)
-    # delumi = mycv2.subtract(img, smoothed_image / 2, dtype=cv2.CV_8U)
-    # delumi[delumi < 64] = 0
-
-    smoothed_image = mycv2.medianBlur(img, krad)
-    avg_image = preprocess(smoothed_image, rad)
-    smoothed_image2 = mycv2.blur(avg_image, (krad, krad))
-    delumi = mycv2.subtract(img, smoothed_image2, dtype=cv2.CV_8U)
-    delumi[delumi < 16] = 0
+    smoothed_image = cv2.medianBlur(img, krad)
+    img1 = mycv2.resize(smoothed_image, (img.shape[1] / rad, img.shape[0] / rad), interpolation=cv2.INTER_LINEAR)
+    avg_image = mycv2.resize(img1, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
+    smoothed_image2 = mycv2.medianBlur(avg_image, krad)
+    delumi = mycv2.subtract(img, smoothed_image / 2, dtype=cv2.CV_8U)
+    delumi[delumi < 64] = 0
     normalized = mycv2.equalizeHist(delumi)
-    Helper.log('deluminate', [img, smoothed_image, avg_image, smoothed_image2, delumi, normalized])
+    Helper.log_pics([img, smoothed_image, avg_image, smoothed_image2, delumi, normalized])
+
+    # PT_BR = (img.shape[0] - 1, img.shape[1] - 1)
+    # smoothed_image = mycv2.medianBlur(img, 41)
+    # filled = cv2.floodFill(smoothed_image, None, (0,0), 255, loDiff=0, upDiff=8)[1]
+    # filled = cv2.floodFill(filled, None, (0,img.shape[0]-1), 255, loDiff=0, upDiff=8)[1]
+    # filled = cv2.floodFill(filled, None, (img.shape[0]-1,0), 255, loDiff=0, upDiff=8)[1]
+    # filled = cv2.floodFill(filled, None, PT_BR, 255, loDiff=0, upDiff=5)[1]
+    # smoothed_image1 = mycv2.medianBlur(filled, krad)
+    # avg_image = preprocess(smoothed_image1, rad)
+    # smoothed_image2 = mycv2.blur(avg_image, (krad, krad))
+    # delumi = mycv2.subtract(img, smoothed_image2, dtype=cv2.CV_8U)
+    # delumi[delumi < 16] = 0
+    # normalized = mycv2.equalizeHist(delumi)
+    # Helper.log_pics([img, smoothed_image, filled, smoothed_image1, avg_image, smoothed_image2, delumi, normalized])
     return normalized
+
+
+def segment(img):
+    mask = numpy.zeros(img.shape, dtype=numpy.uint8)
+    r = mask.shape[0] / 2
+    cv2.circle(mask, (r, r), r - PLATE_PERIF_RAD, (255, 255, 255), cv2.FILLED)
+    core = numpy.bitwise_and(img, mask)
+    periphery = img - core
+    Helper.log_pics([core, periphery])
+    return core, periphery
 
 
 
@@ -290,9 +333,11 @@ def is_80percent_in(shape):
 
 def findROIs(img):
     min_r = min(img.shape[:2]) / 4
-    ret = mycv2.HoughCircles(img, mycv2.HOUGH_GRADIENT, 64, 2 * min_r,
-                                 param1=255, param2=4 * min_r,
-                                 minRadius=min_r, maxRadius=3 * min_r)
+    max_r = int(min_r * 2.4)
+    grain = min_r / 10
+    ret = mycv2.HoughCircles(img, mycv2.HOUGH_GRADIENT, grain, 2 * min_r,
+                                 param1=255, param2=max_r,
+                                 minRadius=min_r, maxRadius=max_r)
     if ret is None:
         Helper.logText("no ROIs")
         return None
@@ -300,14 +345,18 @@ def findROIs(img):
     circles = ret[0].astype(numpy.int16)
     r50 = circles[0][2] / 2
     circles = filter(lambda c: c[0] > r50 and c[1] > r50, circles)
-    Helper.logText("number ROIs at least 1/2 r - {0:d}".format(len(circles)))
+    Helper.logText("number ROIs at least 1/2 r: {0:d}".format(len(circles)))
     circles = filter(is_80percent_in(img.shape), circles)
-    Helper.logText("number ROIs at least 80%% in - {0:d}".format(len(circles)))
+    Helper.logText("number ROIs at least 80% in: {0:d}".format(len(circles)))
+    info = mycv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    for c in circles:
+        mycv2.circle(info, (c[0], c[1]), c[2], (0, 255, 0), thickness=4)
+    Helper.log_pic(info)
     best_c = circles[0]
     circles = filter(lambda c: c[2] > (0.8 * best_c[2]), circles)
     Helper.logText("number rough ROIs {0:d}".format(len(circles)))
     circles_left2right = sorted(circles, key=lambda c: c[2], reverse=True)
-    ret = [{'c': (c[0], c[1]), 'r': c[2] + DILATOR_SIZE} for c in circles_left2right]
+    ret = [{'c': (c[0], c[1]), 'r': int(c[2] + DILATOR_SIZE)} for c in circles_left2right]
     return ret
 
 

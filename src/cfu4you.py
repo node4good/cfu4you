@@ -3,7 +3,6 @@ from datetime import datetime
 import math
 from io import BytesIO as StringIO
 import os
-import vlogging
 import pandas
 CUR_DIR = os.path.dirname(__file__)
 
@@ -11,9 +10,55 @@ js_file = os.path.join(CUR_DIR, r'..\assets\cfugui.js')
 with open(js_file, 'r') as content_file:
     script_code = content_file.read()
 
+# PATH_NAME = r"V:\Camera\5\IMG_20151125_182927.jpg" # single plate (on stand)
+# PATH_NAME = r"V:\Camera\5\IMG_20151125_183446.jpg"  # two plates (left one cut)
+# PATH_NAME = r"V:\Camera\1\IMG_20151104_165813.jpg"  # tiny plate
+# PATH_NAME = r"V:\Camera\2\IMG_20151104_171622.jpg"  # tiny plate
+# PATH_NAME = r"V:\Camera\2\IMG_20151104_171616.jpg"  # small plate
+# PATH_NAME = r"V:\Camera\4\IMG_20151105_142456_data.jpg"
+# PATH_NAME = r"c:\Users\refael\Downloads\2015-11-29.jpg"  # small cut plate
+# PATH_NAME = r"C:\code\6broad\colony-profile\c4\IMG_2670.JPG"  # Lizi
+# PATH_NAME = r"C:\code\colony-profile\c4\IMG_2942.JPG"  # Christina
+# PATH_NAME = r"C:\code\colony-profile\c4\2015-12-11.png"  # 2015-12-11
+# PATH_NAME = r"C:\code\colony-profile\c4\IMG_0649.JPG"  # insane
+# PATH_NAME = r"C:\code\colony-profile\c4\2015-12-18 14.50.04.jpg"  # 72 lawn
+# PATH_NAME = r"V:\CFU\RB\images_for_Refael\E072_d8.JPG" # Z fresh
+# PATH_NAME = r"C:\code\6broad\.data\JL\IMG_20160220_130925_data.jpg"  # Z fresh
 
-def find_colonies1(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# IMGs = [
+# r"V:\Camera\5\IMG_20151125_182156.jpg",
+# r"V:\Camera\5\IMG_20151125_182207.jpg",
+# r"V:\Camera\5\IMG_20151125_182218.jpg",
+# r"V:\Camera\5\IMG_20151125_182228.jpg",
+# ]
+
+
+# DIR_NAME = r"V:\CFU\pics"
+# files = ["20160308_182258_c.jpg"]
+
+# DIR_NAME = r"V:\CFU\5"
+# files = ["IMG_20151125_183850.png"]
+#
+DIR_NAME = r"C:\code\6broad\.data\NR\07-01"
+# DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
+# DIR_NAME = r"C:\Users\refael\Downloads"
+# DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
+# files = os.listdir(DIR_NAME)[1:2]
+# random.shuffle(files)
+# files = ['2016-03-28 17.51.21.jpg'] # EASY
+files = ['19.jpg'] # EASY
+# files = ['E072_g7.JPG'] # HARD
+# files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
+# files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
+
+OUTPUT_DIR = r"C:\code\6broad\.data\NR\out"
+
+
+
+
+
+def find_colonies(img):
+    gray = mycv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
     threshold_f = mycv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, 0)
     threshold_p = threshold_f.astype(numpy.uint8)
     threshold = cv2.erode(threshold_p, K_RECT_3)
@@ -94,7 +139,9 @@ def delete_bad_labels(markers_after_watershed):
 
 def get_sample_parameters(img, mask, b=1 / 2.5):
     stats = ContourStats.find_contours(mask)
-    stats_normal = filter(lambda r: (2 ** 3 < r.area < 2 ** 12 and r.roundness < 0.2), stats)
+    stats1 = filter(lambda r: (2 ** 3 < r.area < 2 ** 12), stats)
+    stats_normal = filter(lambda r: (r.roundness < 0.5), stats1)
+    if (len(stats_normal) == 0): stats_normal = stats1
     draw_stats(mask, stats_normal)
     rads = map(lambda s: s.radius, stats_normal)
     avg = numpy.average(rads)
@@ -290,15 +337,16 @@ def process_file(filename):
         orig = numpy.rot90(orig, 3)
         Helper.logText("rotated")
     masked = blowup_threshold(orig)
-    Helper.log_pics([masked])
+    Helper.log_overlay(orig, masked)
     rois = findROIs(masked)
     roi = rois[0]
     [roi_color_pre] = cropROI(roi, orig)
-    roi_color = blowup_roi(roi_color_pre)
+    core, periphery = segment(roi_color_pre)
+    roi_color = blowup_roi(core)
     Helper.log("roi_color", roi_color)
-    st = find_colonies1(roi_color)
+    st = find_colonies(roi_color)
     if len(st) == 0: return
-    # colonies1_merged = churn(roi_color, st)
+    colonies1_merged = churn(roi_color, st)
     # Helper.log(file_path, colonies1_merged)
     # data = [s.__getstate__() for s in st]
     # df = pandas.DataFrame(data)
@@ -332,50 +380,5 @@ var img_src = "{1}";
 
 
 
-# PATH_NAME = r"V:\Camera\5\IMG_20151125_182927.jpg" # single plate (on stand)
-# PATH_NAME = r"V:\Camera\5\IMG_20151125_183446.jpg"  # two plates (left one cut)
-# PATH_NAME = r"V:\Camera\1\IMG_20151104_165813.jpg"  # tiny plate
-# PATH_NAME = r"V:\Camera\2\IMG_20151104_171622.jpg"  # tiny plate
-# PATH_NAME = r"V:\Camera\2\IMG_20151104_171616.jpg"  # small plate
-# PATH_NAME = r"V:\Camera\4\IMG_20151105_142456_data.jpg"
-# PATH_NAME = r"c:\Users\refael\Downloads\2015-11-29.jpg"  # small cut plate
-# PATH_NAME = r"C:\code\6broad\colony-profile\c4\IMG_2670.JPG"  # Lizi
-# PATH_NAME = r"C:\code\colony-profile\c4\IMG_2942.JPG"  # Christina
-# PATH_NAME = r"C:\code\colony-profile\c4\2015-12-11.png"  # 2015-12-11
-# PATH_NAME = r"C:\code\colony-profile\c4\IMG_0649.JPG"  # insane
-# PATH_NAME = r"C:\code\colony-profile\c4\2015-12-18 14.50.04.jpg"  # 72 lawn
-# PATH_NAME = r"V:\CFU\RB\images_for_Refael\E072_d8.JPG" # Z fresh
-# PATH_NAME = r"C:\code\6broad\.data\JL\IMG_20160220_130925_data.jpg"  # Z fresh
-
-# IMGs = [
-# r"V:\Camera\5\IMG_20151125_182156.jpg",
-# r"V:\Camera\5\IMG_20151125_182207.jpg",
-# r"V:\Camera\5\IMG_20151125_182218.jpg",
-# r"V:\Camera\5\IMG_20151125_182228.jpg",
-# ]
-
-
-# DIR_NAME = r"V:\CFU\pics"
-# files = ["20160308_182258_c.jpg"]
-
-# DIR_NAME = r"V:\CFU\5"
-# files = ["IMG_20151125_183850.png"]
-#
-DIR_NAME = r"C:\code\6broad\.data\CFU\RB\images_for_Refael"
-# DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
-# DIR_NAME = r"C:\Users\refael\Downloads"
-# DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
-# files = os.listdir(DIR_NAME)[1:2]
-# random.shuffle(files)
-# files = ['2016-03-28 17.51.21.jpg'] # EASY
-files = ['E072_d7.JPG'] # EASY
-# files = ['E072_g7.JPG'] # HARD
-# files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
-# files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
-
-OUTPUT_DIR = r"C:\code\6broad\colony-profile\output\cfu4good\ZBA"
-
-
 for f1 in files:
     process_file(f1)
-
