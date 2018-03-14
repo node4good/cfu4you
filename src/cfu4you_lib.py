@@ -1,21 +1,15 @@
 import time
-from webbrowser import WindowsDefault
+import webbrowser
 import traceback
 import math
-import os
-import sys
-from logging import FileHandler
-import logging
 import re
-import json
-
 import cv2
 import numpy
-from vlogging import VisualRecord
-import scipy.ndimage as scind
-from pydash import py_
+import json
 
-chrome = WindowsDefault()
+from LogHelper import LogHelper
+
+chrome = webbrowser.WindowsDefault()
 DILATOR_SIZE = 150
 PLATE_PERIF_RAD = 300
 DEFECT_MIN_SIZE = 2
@@ -31,14 +25,14 @@ K_CIRCLE_15 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
 K_CIRCLE_21 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21))
 ADAPTIVE_BLOCK_SIZE = 51
 ALL_CONTOURS = -1
-COLORMAP = [(255,0,0),
-(0,255,0),
-(0,0,255),
-(255,255,0),
-(255,00,255),
-(0,255,255),
+COLORMAP = [
+    (255, 0, 0),        # red
+    (0, 255, 0),        # green
+    (0, 0, 255),        # blue
+    (255, 255, 0),      # yellow
+    (255, 00, 255),     # magenta
+    (0, 255, 255),      # cyan
 ]
-
 
 
 class NumpyAwareJSONEncoder(json.JSONEncoder):
@@ -52,103 +46,43 @@ class NumpyAwareJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-class Helper(object):
-    OUTPUT_PREFIX = ''
-    time_stamp = format(int((time.time() * 10) % 10000000), "6d")
-    logger = logging.getLogger("cfu4you")
-    htmlfile = 'cfu4you' + time_stamp + '.html'
-    fh = FileHandler(htmlfile, mode="w")
-    fh._old_close = fh.close
-    fh.stream.write('<style>body {white-space: pre; font-family: monospace;}</style>\n')
+class Helper(LogHelper):
+    CLAHE = cv2.createCLAHE(clipLimit=0.0, tileGridSize=(10, 10))
 
-    def on_log_close(h=htmlfile, fh=fh):
-        if 'last_type' in sys.__dict__:
-            print '/'.join(["file:/", os.getcwd().replace('\\', '/'), h])
+
+    def __getattribute__(self, attr_name):
+        """
+        This is some weird OpenCV wrapper to measure timing
+        @param attr_name: name of original method
+        @type attr_name: string
+        @return: the wrapped method
+        @rtype: function
+        """
+
+        if attr_name in ('equalizeHist',):
+            ret = object.__getattribute__(self, attr_name)
         else:
-            webbrowser.open_new_tab(h)
-        fh._old_close()
+            ret = object.__getattribute__(cv2, attr_name)
 
-    fh.close = on_log_close
-    fh.propagate = False
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(fh)
-
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
-    formatter = logging.Formatter('%(asctime)s:%(msecs)03d %(message)s', "%S")
-    ch.setFormatter(formatter)
-    logger.addHandler(ch)
-    ts = time.time()
-
-
-    @classmethod
-    def write_to_html(cls, text):
-        cls.fh.stream.write(text)
-
-
-    def __getattribute__(self, met):
-        if met in ('equalizeHist',):
-            ret = object.__getattribute__(self, met)
-        else:
-            ret = object.__getattribute__(cv2, met)
-
-        if not hasattr(ret, '__call__') or met in ('waitKey', ):
+        if not hasattr(ret, '__call__') or attr_name in ('waitKey',):
             return ret
 
         def wrapped(*iargs, **ikwargs):
             t0 = time.time()
             i_ret = ret(*iargs, **ikwargs)
             t = time.time() - t0
-            Helper.logText("{0:<50} {1:4}-cv2", met, int(t * 1000))
+            Helper.logText("{0:<50} {1:4}-cv2", attr_name, int(t * 1000))
             return i_ret
 
         return wrapped
 
 
     @classmethod
-    def equalizeHist(cls, img):
-        per10 = int(numpy.percentile(img, 10))
-        per90 = numpy.max(img) - per10
-        img1 = mycv2.subtract(img, per10)
-        _, img2 = cv2.threshold(img1, per90, per90, cv2.THRESH_TRUNC)
-        fact = 255.0 / per90
-        img3 = cv2.multiply(img2, fact)
-        Helper.log_pics([img, img1, img2, img3])
-        return img3
-
-
-    @classmethod
-    def log_format_message(cls, msg):
-        old = cls.ts
-        cls.ts = time.time()
-        d = cls.ts - old
-        stack_lines = traceback.extract_stack()
-        good_lines = filter(lambda s: s[2] and 'log' != s[2][0:3] and s[2] != 'wrapped', stack_lines)
-        line_no = good_lines[-1][1]
-        f_name = good_lines[-1][2]
-        mark = "%s:%s" % (f_name, line_no)
-        d_msg = "[{0:4.0f}] {1:<20} {2}".format(d * 1000, mark, msg)
-        return d_msg
-
-    @classmethod
-    def logText(cls, msg, *args):
-        r_msg = msg.format(*args)
-        d_msg = cls.log_format_message(r_msg)
-        cls.logger.info(d_msg)
-        return r_msg
-
-    @classmethod
-    def log(cls, msg, imgs, *args):
-        t = cls.logText(msg, args)
-        cls.logger.debug(VisualRecord(t, imgs))
-        cls.fh.flush()
-
-    @classmethod
     def log_pics(cls, imgs, save=False, *args):
         stack_lines = traceback.extract_stack()
         call_code = stack_lines[-2][3]
         if '[' in call_code:
-            var_names = re.split('\[|\]', call_code)[1]
+            var_names = re.split('[\[\]]', call_code)[1]
             names = re.split(', ?', var_names)
         else:
             var_names = ''
@@ -161,7 +95,7 @@ class Helper(object):
     @classmethod
     def log_pic(cls, img, save=False, *args):
         formatted_lines = traceback.format_stack()
-        var_names = re.split('\(|\)', formatted_lines[-2])[1]
+        var_names = re.split('[()]', formatted_lines[-2])[1]
         name = re.split(', ?', var_names)[0]
         if save:
             cv2.imwrite(cls.OUTPUT_PREFIX + '_' + name + '.jpg', img)
@@ -171,7 +105,7 @@ class Helper(object):
     def log_overlay(cls, img, mask, *args):
         formatted_lines = traceback.format_stack()
         var_names = re.split(', ?|\)', formatted_lines[-2])[3]
-        b,g,r = cv2.split(img)
+        b, g, r = cv2.split(img)
         mask2 = cv2.multiply(mask, 2 / 255.0, dtype=cv2.CV_32F)
         mask3 = cv2.multiply(mask, 0.6 / 255.0, dtype=cv2.CV_32F)
         mask2[mask == 0] = 1.0
@@ -181,14 +115,16 @@ class Helper(object):
         imgs = [cv2.merge([b2, g2, r2])]
         cls.log(var_names, imgs, *args)
 
+
 """:type : cv2"""
 mycv2 = Helper()
 
 
-CLAHE = mycv2.createCLAHE(clipLimit=0.0, tileGridSize=(10, 10))
 def equalizeMulti(img, is_clahe=False, chans=(0, 1, 2)):
-    f1 = CLAHE.apply if False else mycv2.equalizeHist
-    f2 = lambda i, c: f1(c) if i in chans else c
+    f1 = mycv2.CLAHE.apply if False else mycv2.equalizeHist
+
+    def f2(i, c):
+        f1(c) if i in chans else c
     return cv2.merge([f2(*p) for p in enumerate(cv2.split(img))])
 
 
@@ -225,6 +161,8 @@ def block(shape, block_shape):
 
 
 def preprocess(img, block_size):
+    import scipy.ndimage as scind
+
     # For background, we create a labels image using the block
     # size and find the minimum within each block.
     Helper.logText('preprocess 1')
@@ -269,7 +207,7 @@ def blowup_roi(img):
     # img1 = equalizeMulti(img)
     # img2 = equalizeMulti(img1, True, [0])
     img_hsv = mycv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    h,s,v = mycv2.split(img_hsv)
+    h, s, v = mycv2.split(img_hsv)
     # v1d = deluminate(v)
     # Helper.log_pic(v1d)
     # t = cv2.adaptiveThreshold(v, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, ADAPTIVE_BLOCK_SIZE, -0.1)
@@ -283,7 +221,7 @@ def blowup_roi(img):
     # Helper.log_pic(t2)
     v_eq = blowup(v)
     Helper.log_pics([v, v_eq, s, h])
-    blown_hsv = mycv2.merge([h,s,v_eq])
+    blown_hsv = mycv2.merge([h, s, v_eq])
     blown = mycv2.cvtColor(blown_hsv, cv2.COLOR_HSV2BGR)
     return blown
 
@@ -336,8 +274,8 @@ def findROIs(img):
     max_r = int(min_r * 2.4)
     grain = min_r / 10
     ret = mycv2.HoughCircles(img, mycv2.HOUGH_GRADIENT, grain, 2 * min_r,
-                                 param1=255, param2=max_r,
-                                 minRadius=min_r, maxRadius=max_r)
+                             param1=255, param2=max_r,
+                             minRadius=min_r, maxRadius=max_r)
     if ret is None:
         Helper.logText("no ROIs")
         return None
@@ -349,14 +287,14 @@ def findROIs(img):
     circles = filter(is_80percent_in(img.shape), circles)
     Helper.logText("number ROIs at least 80% in: {0:d}".format(len(circles)))
     info = mycv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-    for c in circles:
-        mycv2.circle(info, (c[0], c[1]), c[2], (0, 255, 0), thickness=4)
+    for ci in circles:
+        mycv2.circle(info, (ci[0], ci[1]), ci[2], (0, 255, 0), thickness=4)
     Helper.log_pic(info)
     best_c = circles[0]
     circles = filter(lambda c: c[2] > (0.8 * best_c[2]), circles)
     Helper.logText("number rough ROIs {0:d}".format(len(circles)))
     circles_left2right = sorted(circles, key=lambda c: c[2], reverse=True)
-    ret = [{'c': (c[0], c[1]), 'r': int(c[2] + DILATOR_SIZE)} for c in circles_left2right]
+    ret = map(lambda c: {'c': (c[0], c[1]), 'r': int(c[2] + DILATOR_SIZE)}, circles_left2right)
     return ret
 
 
@@ -510,6 +448,7 @@ class ContourStats(object):
         """
         @rtype: Tuple[ContourStats]
         """
+        from pydash import py_
         ret = cv2.findContours(img.copy(), cv2.RETR_TREE, mode)
         img_marked, contours, [hierarchy] = ret
         stats = py_(contours)\

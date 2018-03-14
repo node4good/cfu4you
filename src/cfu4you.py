@@ -39,19 +39,19 @@ with open(js_file, 'r') as content_file:
 # DIR_NAME = r"V:\CFU\5"
 # files = ["IMG_20151125_183850.png"]
 #
-DIR_NAME = r"C:\code\6broad\.data\NR\07-01"
+DIR_NAME = r"D:\code\6broad\.data\ZBA\2017-09-16"
 # DIR_NAME = r"C:\code\6broad\.data\CFU\nj"
 # DIR_NAME = r"C:\Users\refael\Downloads"
 # DIR_NAME = r"C:\code\6broad\colony-profile\output\cfu4good\RB"
 # files = os.listdir(DIR_NAME)[1:2]
 # random.shuffle(files)
 # files = ['2016-03-28 17.51.21.jpg'] # EASY
-files = ['19.jpg'] # EASY
+files = ['FILE0023.jpg'] # EASY
 # files = ['E072_g7.JPG'] # HARD
 # files = ['DSCF0010_rif_inh_1-10.JPG'] # HARD
 # files = ['2016-03-21-17-46-27_E072_d7_roi_color.jpg'] # cropped
 
-OUTPUT_DIR = r"C:\code\6broad\.data\NR\out"
+OUTPUT_DIR = r"D:\code\6broad\.data\ZBA\2017-09-16\out"
 
 
 

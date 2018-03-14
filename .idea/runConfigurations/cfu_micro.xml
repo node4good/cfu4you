@@ -12,6 +12,10 @@
     <option name="ADD_SOURCE_ROOTS" value="true" />
     <module name="cfu4you" />
     <EXTENSION ID="PythonCoverageRunConfigurationExtension" enabled="false" sample_coverage="true" runner="coverage.py" />
+    <EXTENSION ID="net.ashald.envfile">
+      <option name="IS_ENABLED" value="false" />
+      <ENTRIES />
+    </EXTENSION>
     <option name="SCRIPT_NAME" value="$PROJECT_DIR$/src/micro-cfu4you.py" />
     <option name="PARAMETERS" value="" />
     <option name="SHOW_COMMAND_LINE" value="false" />
