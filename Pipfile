@@ -1,28 +1,20 @@
 [[source]]
-
 url = "https://pypi.python.org/simple"
 verify_ssl = true
 name = "pypi"
 
-
 [dev-packages]
 
-
-
 [packages]
-
 pydash = "*"
 pandas = "*"
 numpy = "*"
 scipy = "*"
 scikit-image = "*"
-
+"a4308e2" = {path = "D:/code/6broad/scikit-image/dist/scikit_image-0.14.dev0-cp27-cp27m-win_amd64.whl"}
 
 [requires]
-
 python_version = "2.7"
 
-
 [pipenv]
-
 allow_prereleases = true
