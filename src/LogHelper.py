@@ -1,3 +1,4 @@
+from datetime import datetime
 import time
 import traceback
 import os
@@ -30,16 +31,24 @@ def setup_file_handler(ts, logger):
 
 class LogHelper(object):
     OUTPUT_PREFIX = ''
+    NO_LINE_TIME = False
     logger = logging.getLogger("cfu4you")
     logger.setLevel(logging.DEBUG)
     _ch = logging.StreamHandler()
     _ch.setLevel(logging.INFO)
-    _formatter = logging.Formatter('%(asctime)s:%(msecs)03d %(message)s', "%S")
+    _formatter = logging.Formatter('%(asctime)s.%(msecs)03d %(message)s', "%M:%S")
     _ch.setFormatter(_formatter)
     logger.addHandler(_ch)
 
-    init_ts = last_ts = time.time()
+    init_t = last_ts = time.time()
+    init_ts = "{:%Y-%m-%d-%H-%M-%S}".format(datetime.fromtimestamp(init_t))
+    init_ti = "{:%Y%m%d%H%M%S}".format(datetime.fromtimestamp(init_t))
     _fh = None  # setup_file_handler(last_ts, logger)
+
+    # Side effect
+    logger.info(init_ts)
+
+
 
     @classmethod
     def write_to_html(cls, text):
@@ -51,7 +60,7 @@ class LogHelper(object):
         t0 = time.time()
         i_ret = functor()
         t = time.time() - t0
-        LogHelper.logText("{0:<50} {1:4}-cv2", functor, int(t * 1000))
+        LogHelper.logText("{1:5}ms {0}", functor.func_name, int(t * 1000))
         return i_ret
 
 
@@ -59,13 +68,16 @@ class LogHelper(object):
     def log_format_message(cls, msg):
         old = cls.last_ts
         cls.last_ts = time.time()
-        d = cls.last_ts - old
         stack_lines = traceback.extract_stack()
-        good_lines = filter(lambda s: s[2] and 'log' != s[2][0:3] and s[2] != 'wrapped', stack_lines)
+        good_lines = filter(lambda s: 'Helper' not in s[0], stack_lines)
         line_no = good_lines[-1][1]
         f_name = good_lines[-1][2]
         mark = "%s:%s" % (f_name, line_no)
-        d_msg = "[{0:4.0f}] {1:<20} {2}".format(d * 1000, mark, msg)
+        if cls.NO_LINE_TIME:
+            d_msg = "{0:<20} | {1}".format(mark, msg)
+        else:
+            d = cls.last_ts - old
+            d_msg = "[{0:4.0f}] {1:<20} {2}".format(d * 1000, mark, msg)
         return d_msg
 
     @classmethod
