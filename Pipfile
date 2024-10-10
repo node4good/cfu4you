@@ -8,10 +8,9 @@ name = "pypi"
 [packages]
 pydash = "*"
 pandas = "*"
-numpy = "*"
+numpy = ">1.16.0"
 scipy = "*"
 scikit-image = "*"
-"a4308e2" = {path = "D:/code/6broad/scikit-image/dist/scikit_image-0.14.dev0-cp27-cp27m-win_amd64.whl"}
 
 [requires]
 python_version = "2.7"
